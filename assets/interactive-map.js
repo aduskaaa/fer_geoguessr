@@ -77,6 +77,7 @@
             state.toggles.photos = !enabled;
             requestAnimationFrame(render);
         },
+        isGuessingMode: () => state.guessing.enabled,
         initRound: () => {
             state.guessing.guessMarker = null;
             state.guessing.actualMarker = null;

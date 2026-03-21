@@ -349,7 +349,16 @@
     }
 
     function updateFromState(newState) {
+        // BUG FIX: Don't let the host's old state overwrite our local "just submitted" status
+        const myId = state.peer.id;
+        const wasGuessedLocally = state.players[myId] ? state.players[myId].hasGuessed : false;
+        
         state.players = newState.players;
+        
+        if (wasGuessedLocally && state.players[myId]) {
+            state.players[myId].hasGuessed = true;
+        }
+
         state.currentRound = newState.currentRound;
         state.currentPhoto = newState.currentPhoto;
         state.gameState = newState.gameState;
@@ -358,6 +367,8 @@
     }
 
     function updateUI() {
+        if (!state.players[state.peer.id]) return; // Wait for join
+
         el.playerNameDisplay.innerText = `PLAYER: ${state.playerName.toUpperCase()}`;
         el.roundInfo.innerText = `ROUND ${state.currentRound} / ${MAX_ROUNDS}`;
         el.playersCountText.innerText = Object.keys(state.players).length;
@@ -366,7 +377,6 @@
         const seconds = state.timeLeft % 60;
         el.timerInfo.innerText = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 
-        // Add pulsing effect when low on time
         if (state.timeLeft <= 10 && state.gameState === "guessing") {
             el.timerInfo.classList.add('timer-low');
         } else {
@@ -374,6 +384,7 @@
         }
 
         if (state.gameState === "lobby") {
+            // ... (rest of lobby logic)
             el.playersListContainer.innerHTML = '';
             Object.values(state.players).forEach(p => {
                 const pBadge = document.createElement('div');
@@ -404,20 +415,29 @@
             el.photoToGuess.src = state.currentPhoto.photo;
         }
 
-        if (state.gameState === "guessing") {
-            el.scoreboard.style.display = 'none';
-            el.btnSubmit.style.display = 'block';
-            el.btnSubmit.disabled = true;
-            window.MapEngine.setGuessingMode(true);
-            
-            // If already guessed, disable submit
-            if (state.players[state.peer.id] && state.players[state.peer.id].hasGuessed) {
-                el.btnSubmit.disabled = true;
-                el.btnSubmit.innerText = "Guessed!";
-            } else {
-                el.btnSubmit.innerText = "Submit Guess";
-            }
-        } else if (state.gameState === "results" || state.gameState === "finished") {
+                if (state.gameState === "guessing") {
+                    el.scoreboard.style.display = 'none';
+                    el.btnSubmit.style.display = 'block';
+                    
+                    const me = state.players[state.peer.id];
+                    if (me && me.hasGuessed) {
+                        el.btnSubmit.disabled = true;
+                        el.btnSubmit.innerText = "Guessed!";
+                        el.btnSubmit.style.background = "#555";
+                    } else {
+                        el.btnSubmit.innerText = "Submit Guess";
+                        el.btnSubmit.style.background = "";
+                        // Enable button only if a marker exists
+                        const currentGuess = window.MapEngine.getGuess();
+                        el.btnSubmit.disabled = (currentGuess === null);
+                    }
+                    
+                    // Only call setGuessingMode if it hasn't been set yet for this round
+                    if (window.MapEngine.isGuessingMode() === false) {
+                        window.MapEngine.setGuessingMode(true);
+                    }
+                }
+         else if (state.gameState === "results" || state.gameState === "finished") {
             showScoreboard();
             window.MapEngine.setActualLocation(state.currentPhoto.lon, state.currentPhoto.lat);
             window.MapEngine.setPlayerGuesses(state.players); // Pass all players to map
