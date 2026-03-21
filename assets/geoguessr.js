@@ -330,15 +330,22 @@
 
     function updateFromState(newState) {
         const myId = state.peer.id;
+        
+        // BUG FIX: Detect if the round has changed to flush the local guess lock
+        const isRoundChange = newState.currentRound !== state.currentRound;
         const wasGuessedLocally = state.players[myId] ? state.players[myId].hasGuessed : false;
+        
         state.players = newState.players;
-        if (wasGuessedLocally && state.players[myId]) {
-            state.players[myId].hasGuessed = true;
-        }
         state.currentRound = newState.currentRound;
         state.currentPhoto = newState.currentPhoto;
         state.gameState = newState.gameState;
         state.timeLeft = newState.timeLeft;
+
+        // Only preserve the "Guessed" status if we are in the SAME round and actually guessing
+        if (!isRoundChange && wasGuessedLocally && state.players[myId] && state.gameState === "guessing") {
+            state.players[myId].hasGuessed = true;
+        }
+        
         updateUI();
     }
 
