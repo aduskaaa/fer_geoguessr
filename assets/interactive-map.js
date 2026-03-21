@@ -75,12 +75,13 @@
         setGuessingMode: (enabled) => {
             state.guessing.enabled = enabled;
             state.toggles.photos = !enabled;
-            if (enabled) {
-                state.guessing.guessMarker = null;
-                state.guessing.actualMarker = null;
-                state.guessing.showActual = false;
-                state.guessing.playerMarkers = {};
-            }
+            requestAnimationFrame(render);
+        },
+        initRound: () => {
+            state.guessing.guessMarker = null;
+            state.guessing.actualMarker = null;
+            state.guessing.showActual = false;
+            state.guessing.playerMarkers = {};
             requestAnimationFrame(render);
         },
         setActualLocation: (lon, lat) => {
@@ -403,6 +404,9 @@
         const mouseY = e.clientY - rect.top;
 
         if (state.guessing.enabled) {
+            // BUG FIX: Prevent placing markers if already guessed
+            if (window.GeoGuessr && !window.GeoGuessr.canPlaceMarker()) return;
+
             const worldX = (mouseX - state.viewX) / state.zoom;
             const worldY = (mouseY - state.viewY) / state.zoom;
             const coords = getCoordsFromPixel(worldX, worldY);

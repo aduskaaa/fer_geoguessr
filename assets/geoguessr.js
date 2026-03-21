@@ -51,9 +51,14 @@
             if (state.gameState === "guessing" && !state.players[state.peer.id].hasGuessed) {
                 el.btnSubmit.disabled = false;
             }
+        },
+        canPlaceMarker: () => {
+            if (!state.players[state.peer.id]) return false;
+            return state.gameState === "guessing" && !state.players[state.peer.id].hasGuessed;
         }
     };
 
+    let lastRoundSeen = -1;
     function init() {
         if (!window.MapEngine) {
             setTimeout(init, 100);
@@ -361,6 +366,13 @@
         const seconds = state.timeLeft % 60;
         el.timerInfo.innerText = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 
+        // Add pulsing effect when low on time
+        if (state.timeLeft <= 10 && state.gameState === "guessing") {
+            el.timerInfo.classList.add('timer-low');
+        } else {
+            el.timerInfo.classList.remove('timer-low');
+        }
+
         if (state.gameState === "lobby") {
             el.playersListContainer.innerHTML = '';
             Object.values(state.players).forEach(p => {
@@ -379,6 +391,12 @@
         el.roomIdBadge.style.display = 'block';
         el.playersCountBadge.style.display = 'block';
         el.timerInfo.style.display = 'block';
+
+        // BUG FIX: Clear pins only when the round actually changes
+        if (state.currentRound !== lastRoundSeen) {
+            window.MapEngine.initRound();
+            lastRoundSeen = state.currentRound;
+        }
 
         if (state.currentPhoto && el.photoToGuess.src !== state.currentPhoto.photo) {
             document.getElementById('photo-loader').style.display = 'flex';
