@@ -63,9 +63,10 @@
         },
         guessing: {
             enabled: false,
-            guessMarker: null, // {lon, lat}
+            guessMarker: null, // Local player's guess
             actualMarker: null, // {lon, lat}
-            showActual: false
+            showActual: false,
+            playerMarkers: {} // id: {lon, lat, name}
         }
     };
 
@@ -78,12 +79,25 @@
                 state.guessing.guessMarker = null;
                 state.guessing.actualMarker = null;
                 state.guessing.showActual = false;
+                state.guessing.playerMarkers = {};
             }
             requestAnimationFrame(render);
         },
         setActualLocation: (lon, lat) => {
             state.guessing.actualMarker = { lon, lat };
             state.guessing.showActual = true;
+            requestAnimationFrame(render);
+        },
+        setPlayerGuesses: (players) => {
+            Object.values(players).forEach(p => {
+                if (p.currentGuess) {
+                    state.guessing.playerMarkers[p.id] = {
+                        lon: p.currentGuess.lon,
+                        lat: p.currentGuess.lat,
+                        name: p.name
+                    };
+                }
+            });
             requestAnimationFrame(render);
         },
         clearGuess: () => {
@@ -578,6 +592,7 @@
 
         // 9. Guess Markers
         if (state.guessing.enabled) {
+            // Draw current local guess
             if (state.guessing.guessMarker) {
                 const p = transform(state.guessing.guessMarker.lon, state.guessing.guessMarker.lat);
                 const size = 15 / zoom;
@@ -591,23 +606,37 @@
                 ctx.fill(); ctx.stroke();
             }
 
+            // Draw all other player markers if in results mode
+            if (state.guessing.showActual) {
+                Object.values(state.guessing.playerMarkers).forEach(m => {
+                    const p = transform(m.lon, m.lat);
+                    const size = 10 / zoom;
+                    ctx.fillStyle = "rgba(231, 76, 60, 0.7)"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1 / zoom;
+                    ctx.beginPath(); ctx.arc(p.x, p.y, size/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+                    
+                    if (zoom > 0.5) {
+                        ctx.font = `bold ${8/zoom}px sans-serif`;
+                        ctx.fillStyle = "#fff";
+                        ctx.textAlign = "center";
+                        ctx.fillText(m.name, p.x, p.y + 12/zoom);
+                    }
+
+                    // Draw line to actual if showing results
+                    if (state.guessing.actualMarker) {
+                        const actual = transform(state.guessing.actualMarker.lon, state.guessing.actualMarker.lat);
+                        ctx.beginPath();
+                        ctx.moveTo(p.x, p.y);
+                        ctx.lineTo(actual.x, actual.y);
+                        ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+                        ctx.lineWidth = 1 / zoom;
+                        ctx.stroke();
+                    }
+                });
+            }
+
             if (state.guessing.showActual && state.guessing.actualMarker) {
                 const actual = transform(state.guessing.actualMarker.lon, state.guessing.actualMarker.lat);
                 const size = 12 / zoom;
-                
-                // Draw line between guess and actual
-                if (state.guessing.guessMarker) {
-                    const guess = transform(state.guessing.guessMarker.lon, state.guessing.guessMarker.lat);
-                    ctx.beginPath();
-                    ctx.moveTo(guess.x, guess.y);
-                    ctx.lineTo(actual.x, actual.y);
-                    ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
-                    ctx.lineWidth = 2 / zoom;
-                    ctx.setLineDash([5/zoom, 5/zoom]);
-                    ctx.stroke();
-                    ctx.setLineDash([]);
-                }
-
                 ctx.fillStyle = "#27ae60"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2 / zoom;
                 ctx.beginPath(); ctx.arc(actual.x, actual.y, size/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
             }

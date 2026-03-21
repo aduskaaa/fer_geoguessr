@@ -1,6 +1,7 @@
 
 (function() {
     const MAX_ROUNDS = 5;
+    const ROUND_TIME = 60; // 60 seconds
     const SCORE_K = 288; // Score coefficient for km distance
 
     const state = {
@@ -14,7 +15,9 @@
         currentRound: 0,
         currentPhoto: null,
         gameState: "lobby", // lobby, guessing, results, finished
-        roundPhotos: []
+        roundPhotos: [],
+        timeLeft: ROUND_TIME,
+        timerInterval: null
     };
 
     // UI Elements
@@ -34,6 +37,7 @@
         playersCountBadge: document.getElementById('players-count-badge'),
         playersCountText: document.getElementById('players-count-text'),
         roundInfo: document.getElementById('round-info'),
+        timerInfo: document.getElementById('timer-info'),
         photoToGuess: document.getElementById('photo-background'),
         btnSubmit: document.getElementById('btn-submit'),
         scoreboard: document.getElementById('scoreboard'),
@@ -241,10 +245,35 @@
                 players: state.players,
                 currentRound: state.currentRound,
                 currentPhoto: state.currentPhoto,
-                gameState: state.gameState
+                gameState: state.gameState,
+                timeLeft: state.timeLeft
             }
         });
         updateUI();
+    }
+
+    function startTimer() {
+        if (state.timerInterval) clearInterval(state.timerInterval);
+        state.timeLeft = ROUND_TIME;
+        
+        state.timerInterval = setInterval(() => {
+            if (!state.isHost) return;
+            
+            state.timeLeft--;
+            if (state.timeLeft <= 0) {
+                clearInterval(state.timerInterval);
+                // Auto-submit for anyone who hasn't guessed
+                Object.keys(state.players).forEach(id => {
+                    if (!state.players[id].hasGuessed) {
+                        // Default to some far off point if no guess? 
+                        // Or just let them have 0 points.
+                        handlePlayerGuess(id, state.players[id].currentGuess || {lon: 0, lat: 0});
+                    }
+                });
+                state.gameState = "results";
+            }
+            broadcastState();
+        }, 1000);
     }
 
     function addPlayer(id, name) {
@@ -284,6 +313,7 @@
                 p.currentGuess = null;
                 p.score = 0;
             });
+            startTimer();
         }
         broadcastState();
         updateUI();
@@ -294,6 +324,7 @@
         state.currentRound = newState.currentRound;
         state.currentPhoto = newState.currentPhoto;
         state.gameState = newState.gameState;
+        state.timeLeft = newState.timeLeft;
         updateUI();
     }
 
@@ -301,6 +332,10 @@
         el.playerNameDisplay.innerText = `PLAYER: ${state.playerName.toUpperCase()}`;
         el.roundInfo.innerText = `ROUND ${state.currentRound} / ${MAX_ROUNDS}`;
         el.playersCountText.innerText = Object.keys(state.players).length;
+
+        const minutes = Math.floor(state.timeLeft / 60);
+        const seconds = state.timeLeft % 60;
+        el.timerInfo.innerText = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 
         if (state.gameState === "lobby") {
             el.playersListContainer.innerHTML = '';
@@ -319,6 +354,7 @@
         el.lobbyModal.style.display = 'none';
         el.roomIdBadge.style.display = 'block';
         el.playersCountBadge.style.display = 'block';
+        el.timerInfo.style.display = 'block';
 
         if (state.currentPhoto) {
             el.photoToGuess.src = state.currentPhoto.photo;
@@ -340,6 +376,7 @@
         } else if (state.gameState === "results" || state.gameState === "finished") {
             showScoreboard();
             window.MapEngine.setActualLocation(state.currentPhoto.lon, state.currentPhoto.lat);
+            window.MapEngine.setPlayerGuesses(state.players); // Pass all players to map
         }
     }
 
@@ -350,8 +387,9 @@
         if (state.isHost) {
             handlePlayerGuess(state.peer.id, guess);
         } else {
-            sendToHost({ type: 'guess', coords: guess });
+            // Update local state temporarily to disable button
             state.players[state.peer.id].hasGuessed = true;
+            sendToHost({ type: 'guess', coords: guess });
             updateUI();
         }
     };
@@ -363,15 +401,21 @@
         player.currentGuess = coords;
         player.hasGuessed = true;
 
-        const dist = getHaversineDistance(coords.lon, coords.lat, state.currentPhoto.lon, state.currentPhoto.lat);
-        player.score = calculateScore(dist);
+        if (coords && coords.lon !== 0) {
+            const dist = getHaversineDistance(coords.lon, coords.lat, state.currentPhoto.lon, state.currentPhoto.lat);
+            player.score = calculateScore(dist);
+            player.lastDist = dist;
+        } else {
+            player.score = 0;
+            player.lastDist = 9999;
+        }
         player.totalScore += player.score;
-        player.lastDist = dist;
 
         // Check if all players guessed
         const allGuessed = Object.values(state.players).every(p => p.hasGuessed);
         if (allGuessed) {
             state.gameState = "results";
+            if (state.timerInterval) clearInterval(state.timerInterval);
         }
         broadcastState();
     }
