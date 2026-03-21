@@ -222,6 +222,10 @@
             case 'gameState':
                 updateFromState(data.state);
                 break;
+            case 'timerTick':
+                state.timeLeft = data.timeLeft;
+                updateUI();
+                break;
             case 'guess':
                 if (state.isHost) {
                     handlePlayerGuess(conn.peer, data.coords);
@@ -257,11 +261,19 @@
         updateUI();
     }
 
+    function broadcastTimer() {
+        broadcast({
+            type: 'timerTick',
+            timeLeft: state.timeLeft
+        });
+        updateUI();
+    }
+
     function startTimer() {
         if (state.timerInterval) clearInterval(state.timerInterval);
         state.timeLeft = ROUND_TIME;
         
-        // Broadcast immediately to show 60s
+        // Broadcast full state once at start of round
         broadcastState();
 
         state.timerInterval = setInterval(() => {
@@ -269,12 +281,11 @@
             
             state.timeLeft--;
             
-            // Sync time every second to avoid drift
-            broadcastState();
-
             if (state.timeLeft <= 0) {
                 clearInterval(state.timerInterval);
                 finishRound();
+            } else {
+                broadcastTimer(); // Lightweight sync
             }
         }, 1000);
     }
@@ -480,8 +491,10 @@
         if (allGuessed) {
             state.gameState = "results";
             if (state.timerInterval) clearInterval(state.timerInterval);
+            broadcastState(); // Full state sync when round ends
+        } else {
+            broadcastState(); // Sync the new guess info to others
         }
-        broadcastState();
     }
 
     function calculateScore(dist) {
