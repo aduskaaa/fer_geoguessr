@@ -256,24 +256,33 @@
         if (state.timerInterval) clearInterval(state.timerInterval);
         state.timeLeft = ROUND_TIME;
         
+        // Broadcast immediately to show 60s
+        broadcastState();
+
         state.timerInterval = setInterval(() => {
             if (!state.isHost) return;
             
             state.timeLeft--;
+            
+            // Sync time every second to avoid drift
+            broadcastState();
+
             if (state.timeLeft <= 0) {
                 clearInterval(state.timerInterval);
-                // Auto-submit for anyone who hasn't guessed
-                Object.keys(state.players).forEach(id => {
-                    if (!state.players[id].hasGuessed) {
-                        // Default to some far off point if no guess? 
-                        // Or just let them have 0 points.
-                        handlePlayerGuess(id, state.players[id].currentGuess || {lon: 0, lat: 0});
-                    }
-                });
-                state.gameState = "results";
+                finishRound();
             }
-            broadcastState();
         }, 1000);
+    }
+
+    function finishRound() {
+        // Auto-submit for anyone who hasn't guessed
+        Object.keys(state.players).forEach(id => {
+            if (!state.players[id].hasGuessed) {
+                handlePlayerGuess(id, {lon: 0, lat: 0});
+            }
+        });
+        state.gameState = "results";
+        broadcastState();
     }
 
     function addPlayer(id, name) {
@@ -291,28 +300,43 @@
     function startNewGame() {
         state.currentRound = 0;
         state.roundPhotos = [];
+        
+        // Reset ALL scores
+        Object.values(state.players).forEach(p => {
+            p.score = 0;
+            p.totalScore = 0;
+            p.hasGuessed = false;
+            p.currentGuess = null;
+        });
+
         // Pick 5 random photos
         const photos = [...window.USER_PHOTOS];
-        for (let i = 0; i < MAX_ROUNDS; i++) {
-            const idx = Math.floor(Math.random() * photos.length);
-            state.roundPhotos.push(photos.splice(idx, 1)[0]);
+        // Fisher-Yates Shuffle
+        for (let i = photos.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [photos[i], photos[j]] = [photos[j], photos[i]];
         }
+        state.roundPhotos = photos.slice(0, MAX_ROUNDS);
+        
         startNextRound();
     }
 
     function startNextRound() {
         state.currentRound++;
+        
+        // Reset round state for everyone
+        Object.values(state.players).forEach(p => {
+            p.hasGuessed = false;
+            p.currentGuess = null;
+            p.score = 0;
+        });
+
         if (state.currentRound > MAX_ROUNDS) {
             state.gameState = "finished";
+            if (state.timerInterval) clearInterval(state.timerInterval);
         } else {
             state.gameState = "guessing";
             state.currentPhoto = state.roundPhotos[state.currentRound - 1];
-            // Reset player round state
-            Object.values(state.players).forEach(p => {
-                p.hasGuessed = false;
-                p.currentGuess = null;
-                p.score = 0;
-            });
             startTimer();
         }
         broadcastState();
@@ -356,7 +380,9 @@
         el.playersCountBadge.style.display = 'block';
         el.timerInfo.style.display = 'block';
 
-        if (state.currentPhoto) {
+        if (state.currentPhoto && el.photoToGuess.src !== state.currentPhoto.photo) {
+            document.getElementById('photo-loader').style.display = 'flex';
+            el.photoToGuess.style.opacity = '0';
             el.photoToGuess.src = state.currentPhoto.photo;
         }
 
@@ -443,12 +469,21 @@
         
         const sortedPlayers = Object.values(state.players).sort((a, b) => b.totalScore - a.totalScore);
         
-        sortedPlayers.forEach(p => {
+        sortedPlayers.forEach((p, index) => {
             const row = document.createElement('div');
             row.className = 'score-row';
+            if (index === 0 && state.gameState === "finished") {
+                row.style.color = "#f1c40f"; // Gold for winner
+                row.style.fontWeight = "bold";
+            }
+            
+            // Format score change
+            let scoreChange = `+${p.score}`;
+            if (p.score === 0) scoreChange = `<span style="color:#e74c3c">MISS</span>`;
+            
             row.innerHTML = `
-                <span>${p.name}</span>
-                <span>+${p.score} (${p.lastDist ? p.lastDist.toFixed(1) : 0} km) <strong>${p.totalScore}</strong></span>
+                <span>${index + 1}. ${p.name} ${index === 0 && state.gameState === "finished" ? '👑' : ''}</span>
+                <span>${scoreChange} <span style="font-size:10px; opacity:0.7">(${p.lastDist ? p.lastDist.toFixed(1) : '-'} km)</span> <strong>${p.totalScore}</strong></span>
             `;
             el.scoreList.appendChild(row);
         });
@@ -464,8 +499,24 @@
         if (state.gameState === "finished") {
             document.getElementById('scoreboard-title').innerText = "FINAL RESULTS";
             if (state.isHost) {
-                el.hostControls.innerHTML = '<button class="btn" style="width: 100%;" onclick="location.reload()">New Game</button>';
+                // Change button to "New Game" which calls startNewGame directly without reload
+                el.hostControls.innerHTML = '';
+                const restartBtn = document.createElement('button');
+                restartBtn.className = 'btn';
+                restartBtn.style.width = '100%';
+                restartBtn.innerText = 'Start New Game';
+                restartBtn.onclick = () => {
+                    startNewGame();
+                };
+                el.hostControls.appendChild(restartBtn);
+            } else {
+                 el.waitingMsg.innerText = "Waiting for host to start a new game...";
             }
+        } else {
+             document.getElementById('scoreboard-title').innerText = "ROUND RESULTS";
+             if (state.isHost) {
+                 el.hostControls.innerHTML = '<button class="btn" style="width: 100%;" onclick="hostNextRound()">Next Round</button>';
+             }
         }
     }
 
