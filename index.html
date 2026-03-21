@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FER GeoGuessr – Far East Russia</title>
+    <meta name="description" content="GeoGuessr game for Far East Russia map mod.">
+    <link rel="icon" href="favicon.ico">
+    <link rel="stylesheet" href="assets/css/global.css">
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root {
+            --header-h: 62px;
+            --accent: #27ae60;
+        }
+
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background: #080808;
+            user-select: none;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        main {
+            height: calc(100vh - var(--header-h));
+            position: relative;
+            background: #080808;
+        }
+
+        /* ----- PHOTO BACKGROUND ----- */
+        #photo-background {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+            z-index: 1;
+        }
+
+        /* ----- FLOATING MAP ----- */
+        #map-container {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            width: 350px;
+            height: 250px;
+            border: 3px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.9);
+            transition: width 0.3s, height 0.3s, border-color 0.3s;
+            z-index: 600;
+            background: #080808;
+            cursor: default;
+        }
+
+        #map-container:hover {
+            width: 600px;
+            height: 400px;
+            border-color: var(--accent);
+        }
+
+        #map-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            cursor: crosshair;
+            image-rendering: -webkit-optimize-contrast;
+        }
+
+        /* ----- GAME UI ----- */
+        #game-controls {
+            position: absolute;
+            bottom: 30px;
+            left: 30px; /* Moved to left to avoid map */
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 700;
+        }
+
+        .btn {
+            background: var(--accent);
+            border: none;
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: 800;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            background: #2ecc71;
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            background: #555;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        /* ----- MODALS ----- */
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            backdrop-filter: blur(10px);
+        }
+
+        .modal-content {
+            background: #111;
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+
+        .input-group {
+            margin: 20px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            text-align: left;
+        }
+
+        input[type="text"] {
+            background: #222;
+            border: 1px solid #444;
+            color: #fff;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+
+        /* ----- ROOM INFO ----- */
+        .room-badge {
+            background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(10px);
+            padding: 8px 15px;
+            border-radius: 20px;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        /* ----- SCOREBOARD ----- */
+        #scoreboard {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(15, 15, 15, 0.95);
+            backdrop-filter: blur(20px);
+            padding: 40px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 3000;
+            width: 400px;
+            display: none;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+        }
+
+        .score-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: #fff;
+        }
+
+        .loader {
+            position: fixed;
+            inset: 0;
+            background: #080808;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 2px solid rgba(255, 255, 255, 0.05);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #round-info {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(10px);
+            padding: 10px 30px;
+            border-radius: 40px;
+            color: #fff;
+            font-weight: 800;
+            letter-spacing: 2px;
+            z-index: 100;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+
+<body>
+    <header class="header" id="site-header" style="height: var(--header-h); background: #111; border-bottom: 1px solid #222; display: flex; align-items: center; padding: 0 20px;">
+        <h2 style="color: #fff; margin: 0; font-size: 18px; letter-spacing: 2px;">FER GEOGUESSR</h2>
+    </header>
+
+    <main id="map-root">
+        <div id="loading-screen" class="loader">
+            <div class="spinner"></div>
+            <p style="margin-top:20px; font-weight:800; font-size:12px; letter-spacing:2px; color:#fff;">LOADING MAP...</p>
+        </div>
+
+        <div id="round-info">ROUND 1 / 5</div>
+
+        <div class="hud-top-left">
+            <p id="player-name-display" style="color: var(--accent); margin: 0; font-weight: 800; font-size: 14px;">PLAYER: -</p>
+        </div>
+
+        <div class="hud-top-right">
+            <div id="room-id-badge" class="room-badge" style="display: none; cursor: pointer;" onclick="copyRoomCode()" title="Click to copy room code">
+                ROOM: <span id="room-id-text" style="color: var(--accent); font-family: monospace;">-</span>
+                <span id="copy-status" style="font-size: 8px; margin-left: 8px; opacity: 0.6; font-weight: 400;">(CLICK TO COPY)</span>
+            </div>
+            <div id="players-count-badge" class="room-badge" style="display: none;"><span id="players-count-text">1</span> PLAYERS</div>
+        </div>
+
+        <img id="photo-background" src="" alt="Where is this?">
+
+        <div id="map-container">
+            <canvas id="map-canvas"></canvas>
+            <div style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; color: #fff; font-size: 10px; pointer-events: none;">INTERACTIVE MAP</div>
+        </div>
+
+        <div id="game-controls">
+            <button id="btn-submit" class="btn" disabled onclick="submitGuess()">Submit Guess</button>
+            <button id="btn-next-round" class="btn" style="display: none;" onclick="nextRound()">Next Round</button>
+        </div>
+
+        <!-- Lobby Modal -->
+        <div id="lobby-modal" class="modal">
+            <div class="modal-content">
+                <h2 style="color: #fff; margin-top: 0;">FER GEOGUESSR</h2>
+                
+                <div id="lobby-room-display" style="display: none; background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px dashed rgba(255,255,255,0.2);">
+                    <div style="color: #aaa; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Your Room Code</div>
+                    <div id="lobby-room-id" style="color: var(--accent); font-size: 24px; font-weight: 800; font-family: monospace; letter-spacing: 2px;">-</div>
+                    <div style="color: #666; font-size: 10px; margin-top: 5px;">Share this with your friends!</div>
+                    <button class="btn" style="padding: 5px 15px; font-size: 10px; margin-top: 10px;" onclick="copyRoomCode()">Copy Code</button>
+                </div>
+
+                <div id="lobby-initial-controls">
+                    <div class="input-group">
+                        <label style="color: #aaa; font-size: 12px;">YOUR NAME</label>
+                        <input type="text" id="input-player-name" placeholder="Enter your name...">
+                    </div>
+                    <div style="display: flex; gap: 10px; margin-top: 20px;">
+                        <button class="btn" style="flex: 1;" onclick="createRoom()">Create Room</button>
+                        <button class="btn btn-secondary" style="flex: 1;" onclick="showJoinInput()">Join Room</button>
+                    </div>
+                </div>
+
+                <div id="lobby-waiting-controls" style="display: none;">
+                    <div id="lobby-players-list" style="margin: 20px 0; text-align: left;">
+                        <label style="color: #aaa; font-size: 12px; display: block; margin-bottom: 10px;">PLAYERS IN LOBBY:</label>
+                        <div id="players-list-container" style="display: flex; flex-wrap: wrap; gap: 10px;">
+                            <!-- Player names will appear here -->
+                        </div>
+                    </div>
+                    <button id="btn-start-game" class="btn" style="width: 100%;" onclick="hostStartGame()">Start Game</button>
+                </div>
+                <div id="join-input-group" style="display: none; margin-top: 20px;" class="input-group">
+                    <label style="color: #aaa; font-size: 12px;">ROOM ID</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="input-room-id" placeholder="Enter room ID..." style="flex: 1;">
+                        <button class="btn" onclick="joinRoom()">Join</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scoreboard Modal -->
+        <div id="scoreboard">
+            <h2 id="scoreboard-title" style="color: #fff; margin-top: 0; text-align: center;">ROUND RESULTS</h2>
+            <div id="score-list" style="margin: 20px 0;">
+                <!-- Scores will be injected here -->
+            </div>
+            <div id="host-controls" style="display: none; margin-top: 20px;">
+                <button class="btn" style="width: 100%;" onclick="hostNextRound()">Next Round</button>
+            </div>
+            <p id="waiting-msg" style="color: #777; font-size: 12px; margin-top: 15px;">Waiting for host to start next round...</p>
+        </div>
+    </main>
+
+    <!-- Map Data -->
+    <script src="assets/site-data.js"></script>
+    <script src="assets/user-photos.js"></script>
+    <script src="assets/Interactive Map/Map DATA/fer-geojson.js"></script>
+    <script src="assets/Interactive Map/Map DATA/fer-road-names.js"></script>
+    
+    <!-- Game Scripts -->
+    <script src="assets/interactive-map.js"></script>
+    <script src="assets/geoguessr.js"></script>
+
+    <script>
+        function showJoinInput() {
+            document.getElementById('join-input-group').style.display = 'block';
+        }
+    </script>
+</body>
+
+</html>
