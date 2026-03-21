@@ -1,4 +1,3 @@
-
 (function() {
     const MAX_ROUNDS = 5;
     const ROUND_TIME = 60; // 60 seconds
@@ -29,6 +28,7 @@
         lobbyWaitingControls: document.getElementById('lobby-waiting-controls'),
         playersListContainer: document.getElementById('players-list-container'),
         btnStartGame: document.getElementById('btn-start-game'),
+        clientWaitMsg: document.getElementById('client-wait-msg'),
         inputPlayerName: document.getElementById('input-player-name'),
         inputRoomId: document.getElementById('input-room-id'),
         playerNameDisplay: document.getElementById('player-name-display'),
@@ -40,10 +40,12 @@
         timerInfo: document.getElementById('timer-info'),
         photoToGuess: document.getElementById('photo-background'),
         btnSubmit: document.getElementById('btn-submit'),
+        btnLeave: document.getElementById('btn-leave'),
         scoreboard: document.getElementById('scoreboard'),
         scoreList: document.getElementById('score-list'),
         hostControls: document.getElementById('host-controls'),
-        waitingMsg: document.getElementById('waiting-msg')
+        waitingMsg: document.getElementById('waiting-msg'),
+        loadingScreen: document.getElementById('loading-screen')
     };
 
     window.GeoGuessr = {
@@ -64,6 +66,11 @@
             setTimeout(init, 100);
             return;
         }
+        
+        // Hide initial loader
+        el.loadingScreen.style.opacity = '0';
+        setTimeout(() => el.loadingScreen.style.display = 'none', 800);
+
         // Load player name from local storage
         const savedName = localStorage.getItem('fer_geoguessr_name');
         if (savedName) el.inputPlayerName.value = savedName;
@@ -80,16 +87,16 @@
             if (copyStatus) {
                 const originalText = copyStatus.innerText;
                 copyStatus.innerText = "COPIED!";
-                copyStatus.style.color = "#2ecc71";
                 setTimeout(() => {
                     copyStatus.innerText = originalText;
-                    copyStatus.style.color = "";
                 }, 2000);
             }
         });
     };
 
     window.createRoom = function() {
+        if (state.peer) return; // Safeguard
+        
         const name = el.inputPlayerName.value.trim() || "Host";
         state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
@@ -99,6 +106,7 @@
             el.lobbyRoomDisplay.style.display = 'block';
             el.lobbyInitialControls.style.display = 'none';
             el.lobbyWaitingControls.style.display = 'block';
+            el.btnLeave.style.display = 'block';
             
             el.lobbyRoomId.innerText = state.peer.id;
             el.roomIdText.innerText = state.peer.id;
@@ -109,8 +117,10 @@
     };
 
     window.joinRoom = function() {
+        if (state.peer) return; // Safeguard
+        
         const name = el.inputPlayerName.value.trim() || "Player";
-        const roomId = el.inputRoomId.value.trim(); // Removed .toUpperCase()
+        const roomId = el.inputRoomId.value.trim();
         if (!roomId) return alert("Please enter a Room ID");
 
         state.playerName = name;
@@ -125,13 +135,14 @@
 
         setupPeer(() => {
             console.log("Peer ready, connecting to:", roomId);
-            state.conn = state.peer.connect(roomId, {
-                reliable: true
-            });
+            state.conn = state.peer.connect(roomId, { reliable: true });
             setupConnection(state.conn);
             
             el.lobbyWaitingControls.style.display = 'block';
             el.btnStartGame.style.display = 'none';
+            el.clientWaitMsg.style.display = 'block';
+            el.btnLeave.style.display = 'block';
+            
             el.lobbyRoomId.innerText = state.roomId;
             el.lobbyRoomId.style.color = "var(--accent)";
             el.roomIdText.innerText = state.roomId;
@@ -145,9 +156,8 @@
     };
 
     function setupPeer(onReady) {
-        // Explicitly set for HTTPS environment (like GitHub Pages)
         state.peer = new Peer({
-            debug: 3, // Full debug info in console
+            debug: 3,
             config: {
                 'iceServers': [
                     { url: 'stun:stun.l.google.com:19302' },
@@ -156,53 +166,40 @@
             }
         });
 
-        state.peer.on('open', (id) => {
-            console.log('Peer ID Opened:', id);
-            onReady();
-        });
+        state.peer.on('open', (id) => onReady());
 
         state.peer.on('connection', (conn) => {
             if (state.isHost) {
-                console.log('New connection from:', conn.peer);
                 setupConnection(conn);
             }
         });
 
         state.peer.on('error', (err) => {
             console.error('Peer error:', err);
-            const errMsg = document.getElementById('lobby-room-id');
+            const errMsg = el.lobbyRoomId;
             if (errMsg) {
                 errMsg.innerText = "ERROR: " + err.type.toUpperCase();
                 errMsg.style.color = "#e74c3c";
             }
-            alert("Connection error: " + err.type + "\nMake sure you copied the ID correctly.");
+            alert("Connection error: " + err.type);
+            location.reload();
         });
     }
 
     function setupConnection(conn) {
         conn.on('open', () => {
-            console.log("Connection Established:", conn.peer);
             if (state.isHost) {
                 state.connections.push(conn);
-                // Host doesn't know player name yet, will get it in 'join' message
             } else {
-                console.log("Sending join request as:", state.playerName);
                 sendToHost({ type: 'join', name: state.playerName });
-                
-                // Show the room code clearly when connected
-                el.lobbyRoomId.innerText = state.roomId;
-                el.lobbyRoomId.style.color = "var(--accent)";
             }
         });
 
-        conn.on('data', (data) => {
-            handleMessage(data, conn);
-        });
+        conn.on('data', (data) => handleMessage(data, conn));
 
         conn.on('close', () => {
-            console.warn('Player disconnected:', conn.peer);
-            delete state.players[conn.peer];
             if (state.isHost) {
+                delete state.players[conn.peer];
                 state.connections = state.connections.filter(c => c.peer !== conn.peer);
                 broadcastState();
             }
@@ -211,7 +208,6 @@
     }
 
     function handleMessage(data, conn) {
-        console.log('Received Message:', data.type, data);
         switch (data.type) {
             case 'join':
                 if (state.isHost) {
@@ -262,36 +258,28 @@
     }
 
     function broadcastTimer() {
-        broadcast({
-            type: 'timerTick',
-            timeLeft: state.timeLeft
-        });
+        broadcast({ type: 'timerTick', timeLeft: state.timeLeft });
         updateUI();
     }
 
     function startTimer() {
         if (state.timerInterval) clearInterval(state.timerInterval);
         state.timeLeft = ROUND_TIME;
-        
-        // Broadcast full state once at start of round
         broadcastState();
 
         state.timerInterval = setInterval(() => {
             if (!state.isHost) return;
-            
             state.timeLeft--;
-            
             if (state.timeLeft <= 0) {
                 clearInterval(state.timerInterval);
                 finishRound();
             } else {
-                broadcastTimer(); // Lightweight sync
+                broadcastTimer();
             }
         }, 1000);
     }
 
     function finishRound() {
-        // Auto-submit for anyone who hasn't guessed
         Object.keys(state.players).forEach(id => {
             if (!state.players[id].hasGuessed) {
                 handlePlayerGuess(id, {lon: 0, lat: 0});
@@ -303,12 +291,8 @@
 
     function addPlayer(id, name) {
         state.players[id] = {
-            id: id,
-            name: name,
-            score: 0,
-            totalScore: 0,
-            hasGuessed: false,
-            currentGuess: null
+            id: id, name: name, score: 0,
+            totalScore: 0, hasGuessed: false, currentGuess: null
         };
         updateUI();
     }
@@ -316,37 +300,23 @@
     function startNewGame() {
         state.currentRound = 0;
         state.roundPhotos = [];
-        
-        // Reset ALL scores
         Object.values(state.players).forEach(p => {
-            p.score = 0;
-            p.totalScore = 0;
-            p.hasGuessed = false;
-            p.currentGuess = null;
+            p.score = 0; p.totalScore = 0; p.hasGuessed = false; p.currentGuess = null;
         });
-
-        // Pick 5 random photos
         const photos = [...window.USER_PHOTOS];
-        // Fisher-Yates Shuffle
         for (let i = photos.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [photos[i], photos[j]] = [photos[j], photos[i]];
         }
         state.roundPhotos = photos.slice(0, MAX_ROUNDS);
-        
         startNextRound();
     }
 
     function startNextRound() {
         state.currentRound++;
-        
-        // Reset round state for everyone
         Object.values(state.players).forEach(p => {
-            p.hasGuessed = false;
-            p.currentGuess = null;
-            p.score = 0;
+            p.hasGuessed = false; p.currentGuess = null; p.score = 0;
         });
-
         if (state.currentRound > MAX_ROUNDS) {
             state.gameState = "finished";
             if (state.timerInterval) clearInterval(state.timerInterval);
@@ -356,20 +326,15 @@
             startTimer();
         }
         broadcastState();
-        updateUI();
     }
 
     function updateFromState(newState) {
-        // BUG FIX: Don't let the host's old state overwrite our local "just submitted" status
         const myId = state.peer.id;
         const wasGuessedLocally = state.players[myId] ? state.players[myId].hasGuessed : false;
-        
         state.players = newState.players;
-        
         if (wasGuessedLocally && state.players[myId]) {
             state.players[myId].hasGuessed = true;
         }
-
         state.currentRound = newState.currentRound;
         state.currentPhoto = newState.currentPhoto;
         state.gameState = newState.gameState;
@@ -378,7 +343,7 @@
     }
 
     function updateUI() {
-        if (!state.players[state.peer.id]) return; // Wait for join
+        if (!state.players[state.peer.id]) return;
 
         el.playerNameDisplay.innerText = `PLAYER: ${state.playerName.toUpperCase()}`;
         el.roundInfo.innerText = `ROUND ${state.currentRound} / ${MAX_ROUNDS}`;
@@ -388,33 +353,27 @@
         const seconds = state.timeLeft % 60;
         el.timerInfo.innerText = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 
-        if (state.timeLeft <= 10 && state.gameState === "guessing") {
-            el.timerInfo.classList.add('timer-low');
-        } else {
-            el.timerInfo.classList.remove('timer-low');
-        }
+        if (state.timeLeft <= 10 && state.gameState === "guessing") el.timerInfo.classList.add('timer-low');
+        else el.timerInfo.classList.remove('timer-low');
 
         if (state.gameState === "lobby") {
-            // ... (rest of lobby logic)
             el.playersListContainer.innerHTML = '';
             Object.values(state.players).forEach(p => {
                 const pBadge = document.createElement('div');
-                pBadge.className = 'room-badge';
-                pBadge.style.background = 'rgba(39, 174, 96, 0.2)';
-                pBadge.style.borderColor = 'var(--accent)';
+                pBadge.className = 'player-badge';
+                if (p.id === state.peer.id) pBadge.style.color = 'var(--accent)';
                 pBadge.innerText = p.name.toUpperCase();
                 el.playersListContainer.appendChild(pBadge);
             });
             return;
         }
 
-        // Hide lobby when game starts
         el.lobbyModal.style.display = 'none';
         el.roomIdBadge.style.display = 'block';
         el.playersCountBadge.style.display = 'block';
         el.timerInfo.style.display = 'block';
+        el.roundInfo.style.display = 'block';
 
-        // BUG FIX: Clear pins only when the round actually changes
         if (state.currentRound !== lastRoundSeen) {
             window.MapEngine.initRound();
             lastRoundSeen = state.currentRound;
@@ -426,43 +385,34 @@
             el.photoToGuess.src = state.currentPhoto.photo;
         }
 
-                if (state.gameState === "guessing") {
-                    el.scoreboard.style.display = 'none';
-                    el.btnSubmit.style.display = 'block';
-                    
-                    const me = state.players[state.peer.id];
-                    if (me && me.hasGuessed) {
-                        el.btnSubmit.disabled = true;
-                        el.btnSubmit.innerText = "Guessed!";
-                        el.btnSubmit.style.background = "#555";
-                    } else {
-                        el.btnSubmit.innerText = "Submit Guess";
-                        el.btnSubmit.style.background = "";
-                        // Enable button only if a marker exists
-                        const currentGuess = window.MapEngine.getGuess();
-                        el.btnSubmit.disabled = (currentGuess === null);
-                    }
-                    
-                    // Only call setGuessingMode if it hasn't been set yet for this round
-                    if (window.MapEngine.isGuessingMode() === false) {
-                        window.MapEngine.setGuessingMode(true);
-                    }
-                }
-         else if (state.gameState === "results" || state.gameState === "finished") {
+        if (state.gameState === "guessing") {
+            el.scoreboard.style.display = 'none';
+            el.btnSubmit.style.display = 'block';
+            const me = state.players[state.peer.id];
+            if (me && me.hasGuessed) {
+                el.btnSubmit.disabled = true;
+                el.btnSubmit.innerText = "Guessed!";
+                el.btnSubmit.style.background = "#333";
+            } else {
+                el.btnSubmit.innerText = "Submit Guess";
+                el.btnSubmit.style.background = "";
+                const currentGuess = window.MapEngine.getGuess();
+                el.btnSubmit.disabled = (currentGuess === null);
+            }
+            if (window.MapEngine.isGuessingMode() === false) window.MapEngine.setGuessingMode(true);
+        } else if (state.gameState === "results" || state.gameState === "finished") {
             showScoreboard();
             window.MapEngine.setActualLocation(state.currentPhoto.lon, state.currentPhoto.lat);
-            window.MapEngine.setPlayerGuesses(state.players); // Pass all players to map
+            window.MapEngine.setPlayerGuesses(state.players);
         }
     }
 
     window.submitGuess = function() {
         const guess = window.MapEngine.getGuess();
         if (!guess) return;
-
         if (state.isHost) {
             handlePlayerGuess(state.peer.id, guess);
         } else {
-            // Update local state temporarily to disable button
             state.players[state.peer.id].hasGuessed = true;
             sendToHost({ type: 'guess', coords: guess });
             updateUI();
@@ -472,29 +422,20 @@
     function handlePlayerGuess(id, coords) {
         const player = state.players[id];
         if (!player || player.hasGuessed) return;
-
         player.currentGuess = coords;
         player.hasGuessed = true;
-
         if (coords && coords.lon !== 0) {
             const dist = getHaversineDistance(coords.lon, coords.lat, state.currentPhoto.lon, state.currentPhoto.lat);
             player.score = calculateScore(dist);
             player.lastDist = dist;
-        } else {
-            player.score = 0;
-            player.lastDist = 9999;
-        }
+        } else { player.score = 0; player.lastDist = 9999; }
         player.totalScore += player.score;
-
-        // Check if all players guessed
         const allGuessed = Object.values(state.players).every(p => p.hasGuessed);
         if (allGuessed) {
             state.gameState = "results";
             if (state.timerInterval) clearInterval(state.timerInterval);
-            broadcastState(); // Full state sync when round ends
-        } else {
-            broadcastState(); // Sync the new guess info to others
-        }
+            broadcastState();
+        } else { broadcastState(); }
     }
 
     function calculateScore(dist) {
@@ -517,28 +458,21 @@
     function showScoreboard() {
         el.scoreboard.style.display = 'block';
         el.scoreList.innerHTML = '';
-        
         const sortedPlayers = Object.values(state.players).sort((a, b) => b.totalScore - a.totalScore);
-        
         sortedPlayers.forEach((p, index) => {
             const row = document.createElement('div');
             row.className = 'score-row';
             if (index === 0 && state.gameState === "finished") {
-                row.style.color = "#f1c40f"; // Gold for winner
-                row.style.fontWeight = "bold";
+                row.style.color = "#f1c40f"; row.style.fontWeight = "bold";
             }
-            
-            // Format score change
             let scoreChange = `+${p.score}`;
             if (p.score === 0) scoreChange = `<span style="color:#e74c3c">MISS</span>`;
-            
             row.innerHTML = `
                 <span>${index + 1}. ${p.name} ${index === 0 && state.gameState === "finished" ? '👑' : ''}</span>
                 <span>${scoreChange} <span style="font-size:10px; opacity:0.7">(${p.lastDist ? p.lastDist.toFixed(1) : '-'} km)</span> <strong>${p.totalScore}</strong></span>
             `;
             el.scoreList.appendChild(row);
         });
-
         if (state.isHost) {
             el.hostControls.style.display = 'block';
             el.waitingMsg.style.display = 'none';
@@ -546,23 +480,17 @@
             el.hostControls.style.display = 'none';
             el.waitingMsg.style.display = 'block';
         }
-
         if (state.gameState === "finished") {
             document.getElementById('scoreboard-title').innerText = "FINAL RESULTS";
             if (state.isHost) {
-                // Change button to "New Game" which calls startNewGame directly without reload
                 el.hostControls.innerHTML = '';
                 const restartBtn = document.createElement('button');
                 restartBtn.className = 'btn';
                 restartBtn.style.width = '100%';
                 restartBtn.innerText = 'Start New Game';
-                restartBtn.onclick = () => {
-                    startNewGame();
-                };
+                restartBtn.onclick = () => startNewGame();
                 el.hostControls.appendChild(restartBtn);
-            } else {
-                 el.waitingMsg.innerText = "Waiting for host to start a new game...";
-            }
+            } else { el.waitingMsg.innerText = "Waiting for host to start a new game..."; }
         } else {
              document.getElementById('scoreboard-title').innerText = "ROUND RESULTS";
              if (state.isHost) {
@@ -572,9 +500,7 @@
     }
 
     window.hostNextRound = function() {
-        if (state.isHost) {
-            startNextRound();
-        }
+        if (state.isHost) startNextRound();
     };
 
     init();
