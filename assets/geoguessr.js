@@ -101,7 +101,7 @@
 
     window.joinRoom = function() {
         const name = el.inputPlayerName.value.trim() || "Player";
-        const roomId = el.inputRoomId.value.trim().toUpperCase();
+        const roomId = el.inputRoomId.value.trim(); // Removed .toUpperCase()
         if (!roomId) return alert("Please enter a Room ID");
 
         state.playerName = name;
@@ -109,16 +109,22 @@
         state.isHost = false;
         state.roomId = roomId;
 
+        el.lobbyInitialControls.style.display = 'none';
+        el.lobbyRoomDisplay.style.display = 'block';
+        el.lobbyRoomId.innerText = "CONNECTING...";
+        el.lobbyRoomId.style.color = "#f1c40f";
+
         setupPeer(() => {
-            state.conn = state.peer.connect(roomId);
+            console.log("Peer ready, connecting to:", roomId);
+            state.conn = state.peer.connect(roomId, {
+                reliable: true
+            });
             setupConnection(state.conn);
             
-            el.lobbyRoomDisplay.style.display = 'block';
-            el.lobbyInitialControls.style.display = 'none';
             el.lobbyWaitingControls.style.display = 'block';
-            el.btnStartGame.style.display = 'none'; // Only host can start
-            
+            el.btnStartGame.style.display = 'none';
             el.lobbyRoomId.innerText = state.roomId;
+            el.lobbyRoomId.style.color = "var(--accent)";
             el.roomIdText.innerText = state.roomId;
         });
     };
@@ -130,35 +136,53 @@
     };
 
     function setupPeer(onReady) {
-        state.peer = new Peer();
+        // Explicitly set for HTTPS environment (like GitHub Pages)
+        state.peer = new Peer({
+            debug: 3, // Full debug info in console
+            config: {
+                'iceServers': [
+                    { url: 'stun:stun.l.google.com:19302' },
+                    { url: 'stun:stun1.l.google.com:19302' },
+                ]
+            }
+        });
+
         state.peer.on('open', (id) => {
-            console.log('Peer ID:', id);
+            console.log('Peer ID Opened:', id);
             onReady();
         });
 
         state.peer.on('connection', (conn) => {
             if (state.isHost) {
+                console.log('New connection from:', conn.peer);
                 setupConnection(conn);
             }
         });
 
         state.peer.on('error', (err) => {
             console.error('Peer error:', err);
-            alert("Connection error: " + err.type);
+            const errMsg = document.getElementById('lobby-room-id');
+            if (errMsg) {
+                errMsg.innerText = "ERROR: " + err.type.toUpperCase();
+                errMsg.style.color = "#e74c3c";
+            }
+            alert("Connection error: " + err.type + "\nMake sure you copied the ID correctly.");
         });
     }
 
     function setupConnection(conn) {
         conn.on('open', () => {
+            console.log("Connection Established:", conn.peer);
             if (state.isHost) {
                 state.connections.push(conn);
                 // Host doesn't know player name yet, will get it in 'join' message
             } else {
+                console.log("Sending join request as:", state.playerName);
                 sendToHost({ type: 'join', name: state.playerName });
-                el.lobbyModal.style.display = 'none';
-                el.roomIdBadge.style.display = 'block';
-                el.roomIdText.innerText = state.roomId;
-                el.playersCountBadge.style.display = 'block';
+                
+                // Show the room code clearly when connected
+                el.lobbyRoomId.innerText = state.roomId;
+                el.lobbyRoomId.style.color = "var(--accent)";
             }
         });
 
@@ -167,13 +191,18 @@
         });
 
         conn.on('close', () => {
-            console.log('Connection closed');
-            // Handle player disconnect
+            console.warn('Player disconnected:', conn.peer);
+            delete state.players[conn.peer];
+            if (state.isHost) {
+                state.connections = state.connections.filter(c => c.peer !== conn.peer);
+                broadcastState();
+            }
+            updateUI();
         });
     }
 
     function handleMessage(data, conn) {
-        console.log('Received:', data);
+        console.log('Received Message:', data.type, data);
         switch (data.type) {
             case 'join':
                 if (state.isHost) {
