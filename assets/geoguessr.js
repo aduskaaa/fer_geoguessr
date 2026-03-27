@@ -67,6 +67,17 @@
     };
 
     let lastRoundSeen = -1;
+    let heartbeatInterval = null;
+
+    function generateShortId() {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        let result = '';
+        for (let i = 0; i < 5; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return result;
+    }
+
     function init() {
         if (!window.MapEngine) {
             setTimeout(init, 100);
@@ -81,7 +92,7 @@
 
     window.copyRoomCode = function () {
         const code = el.roomIdText.innerText;
-        if (!code || code === '-') return;
+        if (!code || code === '-' || code === 'CONNECTING...') return;
         navigator.clipboard.writeText(code).then(() => {
             const copyStatus = document.getElementById('copy-status');
             if (copyStatus) {
@@ -98,40 +109,69 @@
         state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
         state.isHost = true;
-        setupPeer(() => {
-            el.lobbyRoomDisplay.style.display = 'block';
-            el.lobbyInitialControls.style.display = 'none';
-            el.lobbyWaitingControls.style.display = 'block';
-            el.btnLeave.style.display = 'block';
-            el.lobbyRoomId.innerText = state.peer.id;
-            el.roomIdText.innerText = state.peer.id;
-            addPlayer(state.peer.id, state.playerName);
-        });
+
+        const attemptCreate = (id) => {
+            setupPeer(id, () => {
+                el.lobbyRoomDisplay.style.display = 'block';
+                el.lobbyInitialControls.style.display = 'none';
+                el.lobbyWaitingControls.style.display = 'block';
+                el.btnLeave.style.display = 'block';
+                el.lobbyRoomId.innerText = state.peer.id;
+                el.roomIdText.innerText = state.peer.id;
+                addPlayer(state.peer.id, state.playerName);
+            }, (err) => {
+                if (err.type === 'unavailable-id') {
+                    attemptCreate(generateShortId());
+                } else {
+                    console.error("Peer Error:", err);
+                    alert("Failed to create room: " + err.type);
+                    location.reload();
+                }
+            });
+        };
+        attemptCreate(generateShortId());
     };
 
     window.joinRoom = function () {
         if (state.peer) return;
         const name = el.inputPlayerName.value.trim() || "Player";
-        const roomId = el.inputRoomId.value.trim();
+        const roomId = el.inputRoomId.value.trim().toUpperCase();
         if (!roomId) return alert("Please enter a Room ID");
         state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
         state.isHost = false;
         state.roomId = roomId;
+        
         el.lobbyInitialControls.style.display = 'none';
         el.lobbyRoomDisplay.style.display = 'block';
         el.lobbyRoomId.innerText = "CONNECTING...";
         el.lobbyRoomId.style.color = "#f1c40f";
-        setupPeer(() => {
+
+        setupPeer(null, () => {
             state.conn = state.peer.connect(roomId, { reliable: true });
             setupConnection(state.conn);
-            el.lobbyWaitingControls.style.display = 'block';
-            el.btnStartGame.style.display = 'none';
-            el.clientWaitMsg.style.display = 'block';
-            el.btnLeave.style.display = 'block';
-            el.lobbyRoomId.innerText = state.roomId;
-            el.lobbyRoomId.style.color = "var(--accent)";
-            el.roomIdText.innerText = state.roomId;
+            
+            // Timeout for connection
+            const connTimeout = setTimeout(() => {
+                if (!state.conn.open) {
+                    alert("Could not connect to room. Host might be offline or ID is incorrect.");
+                    location.reload();
+                }
+            }, 10000);
+
+            state.conn.on('open', () => {
+                clearTimeout(connTimeout);
+                el.lobbyWaitingControls.style.display = 'block';
+                el.btnStartGame.style.display = 'none';
+                el.clientWaitMsg.style.display = 'block';
+                el.btnLeave.style.display = 'block';
+                el.lobbyRoomId.innerText = state.roomId;
+                el.lobbyRoomId.style.color = "var(--accent)";
+                el.roomIdText.innerText = state.roomId;
+            });
+        }, (err) => {
+            alert("Connection error: " + err.type);
+            location.reload();
         });
     };
 
@@ -139,39 +179,57 @@
         if (state.isHost) startNewGame();
     };
 
-    function setupPeer(onReady) {
-        state.peer = new Peer({
-            debug: 1,
-            config: {
-                'iceServers': [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:stun3.l.google.com:19302' },
-                    { urls: 'stun:stun4.l.google.com:19302' },
-                    { urls: 'stun:stun.voiparound.com:3478' },
-                    { urls: 'stun:stun.voipbuster.com:3478' },
-                    { urls: 'stun:stun.voipstunt.com:3478' },
-                    { urls: 'stun:stun.voxgratia.org:3478' },
-                    { urls: 'stun:stun.ekiga.net:3478' },
-                    { urls: 'stun:stun.ideasip.com:3478' },
-                    { urls: 'stun:stun.schlund.de:3478' }
-                ]
+    function setupPeer(id, onReady, onError) {
+        const config = {
+            'iceServers': [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' }
+            ]
+        };
+        state.peer = id ? new Peer(id, { config, debug: 1 }) : new Peer({ config, debug: 1 });
+        
+        state.peer.on('open', (id) => onReady(id));
+        state.peer.on('connection', (conn) => { 
+            if (state.isHost) setupConnection(conn); 
+        });
+        state.peer.on('error', (err) => {
+            if (onError) onError(err);
+            else {
+                console.error(err);
+                alert("Connection error: " + err.type);
+                location.reload();
             }
         });
-        state.peer.on('open', (id) => onReady());
-        state.peer.on('connection', (conn) => { if (state.isHost) setupConnection(conn); });
-        state.peer.on('error', (err) => {
-            console.error(err);
-            alert("Connection error: " + err.type);
-            location.reload();
-        });
+
+        // Heartbeat to keep connection alive
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
+        heartbeatInterval = setInterval(() => {
+            if (state.isHost) {
+                broadcast({ type: 'heartbeat' });
+            } else if (state.conn && state.conn.open) {
+                sendToHost({ type: 'heartbeat' });
+            }
+        }, 5000);
     }
 
     function setupConnection(conn) {
         conn.on('open', () => {
-            if (state.isHost) state.connections.push(conn);
-            else sendToHost({ type: 'join', name: state.playerName });
+            if (state.isHost) {
+                state.connections.push(conn);
+                // Send current state immediately so player sees lobby
+                conn.send({
+                    type: 'gameState',
+                    state: {
+                        players: state.players, currentRound: state.currentRound,
+                        currentPhoto: state.currentPhoto, gameState: state.gameState, timeLeft: state.timeLeft
+                    }
+                });
+            } else {
+                sendToHost({ type: 'join', name: state.playerName });
+            }
         });
         conn.on('data', (data) => handleMessage(data, conn));
         conn.on('close', () => {
@@ -179,15 +237,27 @@
                 delete state.players[conn.peer];
                 state.connections = state.connections.filter(c => c.peer !== conn.peer);
                 broadcastState();
+            } else {
+                alert("Disconnected from host.");
+                location.reload();
             }
             updateUI();
+        });
+        conn.on('error', (err) => {
+            console.error("Connection Error:", err);
         });
     }
 
     function handleMessage(data, conn) {
         switch (data.type) {
+            case 'heartbeat':
+                // Just to keep connection alive
+                break;
             case 'join':
-                if (state.isHost) { addPlayer(conn.peer, data.name); broadcastState(); }
+                if (state.isHost) { 
+                    addPlayer(conn.peer, data.name); 
+                    broadcastState(); 
+                }
                 break;
             case 'gameState':
                 updateFromState(data.state);
@@ -205,8 +275,8 @@
         }
     }
 
-    function sendToHost(data) { if (state.conn) state.conn.send(data); }
-    function broadcast(data) { state.connections.forEach(c => c.send(data)); }
+    function sendToHost(data) { if (state.conn && state.conn.open) state.conn.send(data); }
+    function broadcast(data) { state.connections.forEach(c => { if (c.open) c.send(data); }); }
 
     function broadcastState() {
         broadcast({
@@ -290,6 +360,22 @@
     }
 
     function updateUI() {
+        if (state.gameState === "lobby") {
+            el.playersListContainer.innerHTML = '';
+            const playerIds = Object.keys(state.players);
+            if (playerIds.length === 0 && !state.isHost) {
+                el.playersListContainer.innerHTML = '<div style="color:#666; font-size:10px;">WAITING FOR PLAYER LIST...</div>';
+            }
+            Object.values(state.players).forEach(p => {
+                const pBadge = document.createElement('div');
+                pBadge.className = 'player-badge';
+                if (p.id === (state.peer ? state.peer.id : null)) pBadge.style.color = 'var(--accent)';
+                pBadge.innerText = p.name.toUpperCase();
+                el.playersListContainer.appendChild(pBadge);
+            });
+            return;
+        }
+
         if (!state.players[state.peer.id]) return;
         el.playerNameDisplay.innerText = `PLAYER: ${state.playerName.toUpperCase()}`;
         el.roundInfo.innerText = `ROUND ${state.currentRound} / ${MAX_ROUNDS}`;
