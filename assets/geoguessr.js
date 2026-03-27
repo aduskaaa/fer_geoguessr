@@ -374,6 +374,27 @@ import { peerService } from './peer-service.js';
         }
     };
 
+    function handleMessage(data, sender) {
+        if (!data || !data.type) return;
+        switch (data.type) {
+            case 'join':
+                if (peerService.getIsHost()) {
+                    addPlayer(sender, data.name || "Unknown");
+                    broadcastState();
+                }
+                break;
+            case 'gameState':
+                if (!peerService.getIsHost()) updateFromState(data.state);
+                break;
+            case 'timerTick':
+                if (!peerService.getIsHost()) { state.timeLeft = data.timeLeft; updateUI(); }
+                break;
+            case 'guess':
+                if (peerService.getIsHost()) handlePlayerGuess(sender, data.coords);
+                break;
+        }
+    }
+
     function handlePlayerGuess(id, coords) {
         const player = state.players[id];
         if (!player || player.hasGuessed) return;
