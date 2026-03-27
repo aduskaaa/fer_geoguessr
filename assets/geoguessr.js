@@ -127,11 +127,13 @@
     };
 
     window.createRoom = function () {
-        if (state.peer) return;
         const name = el.inputPlayerName.value.trim() || "Host";
         state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
         state.isHost = true;
+
+        if (state.peer) state.peer.destroy();
+
         setupPeer(() => {
             el.lobbyRoomDisplay.style.display = 'block';
             el.lobbyInitialControls.style.display = 'none';
@@ -140,24 +142,30 @@
             el.lobbyRoomId.innerText = state.peer.id;
             el.roomIdText.innerText = state.peer.id;
             addPlayer(state.peer.id, state.playerName);
+            console.log("Room created with ID:", state.peer.id);
         });
     };
 
     window.joinRoom = function () {
-        if (state.peer) return;
         const name = el.inputPlayerName.value.trim() || "Player";
-        const roomId = el.inputRoomId.value.trim();
+        const roomId = el.inputRoomId.value.trim(); // PeerJS IDs are case-sensitive
         if (!roomId) return alert("Please enter a Room ID");
+
         state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
         state.isHost = false;
         state.roomId = roomId;
+
         el.lobbyInitialControls.style.display = 'none';
         el.lobbyRoomDisplay.style.display = 'block';
         el.lobbyRoomId.innerText = "CONNECTING...";
         el.lobbyRoomId.style.color = "#f1c40f";
+
+        if (state.peer) state.peer.destroy();
+
         setupPeer(() => {
-            state.conn = state.peer.connect(roomId, { reliable: true });
+            console.log("Peer opened, connecting to:", roomId);
+            state.conn = state.peer.connect(roomId, { reliable: false });
             setupConnection(state.conn);
             el.lobbyWaitingControls.style.display = 'block';
             el.btnStartGame.style.display = 'none';
@@ -175,21 +183,45 @@
 
     function setupPeer(onReady) {
         state.peer = new Peer({
-            debug: 1,
-            config: { 'iceServers': [{ url: 'stun:stun.l.google.com:19302' }, { url: 'stun:stun1.l.google.com:19302' }] }
+            debug: 2,
+            config: { 'iceServers': [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
         });
-        state.peer.on('open', (id) => onReady());
-        state.peer.on('connection', (conn) => { if (state.isHost) setupConnection(conn); });
+
+        state.peer.on('open', (id) => {
+            console.log("My Peer ID:", id);
+            onReady();
+        });
+
+        state.peer.on('connection', (conn) => {
+            console.log("Incoming connection from:", conn.peer);
+            if (state.isHost) setupConnection(conn);
+        });
+
         state.peer.on('error', (err) => {
-            console.error(err);
-            alert("Connection error: " + err.type);
-            location.reload();
+            console.error("PeerJS Error:", err);
+            if (err.type === 'peer-unavailable') {
+                alert("Room not found. Make sure the ID is correct.");
+                el.lobbyRoomId.innerText = "NOT FOUND";
+                el.lobbyRoomId.style.color = "#e74c3c";
+                el.lobbyInitialControls.style.display = 'block';
+                state.peer.destroy();
+                state.peer = null;
+            } else if (err.type === 'unavailable-id') {
+                alert("ID is already taken. Try again.");
+                location.reload();
+            } else {
+                alert("Connection error: " + err.type);
+                // Don't always reload, allow user to try again
+            }
         });
     }
 
     function setupConnection(conn) {
         conn.on('open', () => {
-            if (state.isHost) state.connections.push(conn);
+            if (state.isHost) {
+                state.connections.push(conn);
+                broadcastState(); // Broadcast updated player list once connection is truly open
+            }
             else sendToHost({ type: 'join', name: state.playerName });
         });
         conn.on('data', (data) => handleMessage(data, conn));
@@ -206,7 +238,20 @@
     function handleMessage(data, conn) {
         switch (data.type) {
             case 'join':
-                if (state.isHost) { addPlayer(conn.peer, data.name); broadcastState(); }
+                if (state.isHost) {
+                    addPlayer(conn.peer, data.name);
+                    broadcastState();
+                    // Direct response to joiner if open, otherwise broadcast above handles it once the connection opens
+                    if (conn.open) {
+                        conn.send({
+                            type: 'gameState',
+                            state: {
+                                players: state.players, currentRound: state.currentRound,
+                                currentPhoto: state.currentPhoto, gameState: state.gameState, timeLeft: state.timeLeft
+                            }
+                        });
+                    }
+                }
                 break;
             case 'gameState':
                 updateFromState(data.state);
@@ -309,7 +354,13 @@
     }
 
     function updateUI() {
-        if (!state.players[state.peer.id]) return;
+        if (!state.peer || !state.players[state.peer.id]) {
+            if (state.gameState === "lobby" && state.peer && state.peer.id) {
+                // If we're the client but haven't been added to players yet, just show lobby modal as empty for now
+                el.playersListContainer.innerHTML = '<div class="player-badge">JOINING...</div>';
+            }
+            return;
+        }
         el.playerNameDisplay.innerText = `PLAYER: ${state.playerName.toUpperCase()}`;
         el.roundInfo.innerText = `ROUND ${state.currentRound} / ${MAX_ROUNDS}`;
         el.playersCountText.innerText = Object.keys(state.players).length;
