@@ -135,32 +135,38 @@
     window.joinRoom = function () {
         if (state.peer) return;
         const name = el.inputPlayerName.value.trim() || "Player";
-        const roomId = el.inputRoomId.value.trim().toUpperCase();
-        if (!roomId) return alert("Please enter a Room ID");
+        const roomIdInput = el.inputRoomId.value.trim().toUpperCase();
+        if (!roomIdInput) return alert("Please enter a Room ID");
         state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
         state.isHost = false;
-        state.roomId = roomId;
+        state.roomId = roomIdInput;
         
         el.lobbyInitialControls.style.display = 'none';
         el.lobbyRoomDisplay.style.display = 'block';
         el.lobbyRoomId.innerText = "CONNECTING...";
         el.lobbyRoomId.style.color = "#f1c40f";
 
-        setupPeer(null, () => {
-            state.conn = state.peer.connect(roomId, { reliable: true });
+        setupPeer(null, (myId) => {
+            console.log("[LOBBY] My client ID is:", myId);
+            console.log("[LOBBY] Attempting to connect to host:", state.roomId);
+            
+            // Peer.connect uses the default reliable WebRTC data channel
+            state.conn = state.peer.connect(state.roomId);
             setupConnection(state.conn);
             
-            // Timeout for connection
+            // Connection Timeout for Join
             const connTimeout = setTimeout(() => {
-                if (!state.conn.open) {
-                    alert("Could not connect to room. Host might be offline or ID is incorrect.");
+                if (!state.conn || !state.conn.open) {
+                    console.error("[LOBBY] Connection timeout to host:", state.roomId);
+                    alert("Could not connect to room " + state.roomId + ". Check code or host status.");
                     location.reload();
                 }
-            }, 10000);
+            }, 12000);
 
             state.conn.on('open', () => {
                 clearTimeout(connTimeout);
+                console.log("[LOBBY] Connected to host successfully.");
                 el.lobbyWaitingControls.style.display = 'block';
                 el.btnStartGame.style.display = 'none';
                 el.clientWaitMsg.style.display = 'block';
@@ -169,8 +175,16 @@
                 el.lobbyRoomId.style.color = "var(--accent)";
                 el.roomIdText.innerText = state.roomId;
             });
+
+            state.conn.on('error', (err) => {
+                clearTimeout(connTimeout);
+                console.error("[LOBBY] Connection error:", err);
+                alert("Failed to join room: " + err.message);
+                location.reload();
+            });
         }, (err) => {
-            alert("Connection error: " + err.type);
+            console.error("[LOBBY] Peer setup error:", err);
+            alert("Peer setup error: " + err.type);
             location.reload();
         });
     };
@@ -180,31 +194,42 @@
     };
 
     function setupPeer(id, onReady, onError) {
-        const config = {
-            'iceServers': [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' }
-            ]
+        // Using PeerJS defaults (no 'config' provided) is often the most reliable way 
+        // to handle various network conditions as they maintain their own list of 
+        // STUN/TURN servers.
+        const options = {
+            debug: 1
         };
-        state.peer = id ? new Peer(id, { config, debug: 1 }) : new Peer({ config, debug: 1 });
+
+        try {
+            state.peer = id ? new Peer(id, options) : new Peer(options);
+        } catch (e) {
+            console.error("PeerJS Constructor Error:", e);
+            state.peer = new Peer({ debug: 1 });
+        }
         
-        state.peer.on('open', (id) => onReady(id));
-        state.peer.on('connection', (conn) => { 
-            if (state.isHost) setupConnection(conn); 
+        state.peer.on('open', (id) => {
+            console.log("[PEER] My ID is:", id);
+            onReady(id);
         });
+        
+        state.peer.on('connection', (conn) => { 
+            if (state.isHost) {
+                console.log("[PEER] Incoming connection from:", conn.peer);
+                setupConnection(conn); 
+            }
+        });
+
         state.peer.on('error', (err) => {
+            console.error("[PEER] Error:", err.type, err);
             if (onError) onError(err);
             else {
-                console.error(err);
-                alert("Connection error: " + err.type);
+                alert("Network Error: " + err.type);
                 location.reload();
             }
         });
 
-        // Heartbeat to keep connection alive
+        // Fast heartbeat (3s) to keep connections alive through NATs
         if (heartbeatInterval) clearInterval(heartbeatInterval);
         heartbeatInterval = setInterval(() => {
             if (state.isHost) {
@@ -212,14 +237,26 @@
             } else if (state.conn && state.conn.open) {
                 sendToHost({ type: 'heartbeat' });
             }
-        }, 5000);
+        }, 3000);
     }
 
     function setupConnection(conn) {
+        // Timeout if handshake takes too long
+        const handshakeTimeout = setTimeout(() => {
+            if (!conn.open) {
+                console.warn("[PEER] Handshake timeout for:", conn.peer);
+                conn.close();
+            }
+        }, 8000);
+
         conn.on('open', () => {
+            clearTimeout(handshakeTimeout);
+            console.log("[PEER] Connection open with:", conn.peer);
             if (state.isHost) {
+                // Remove any existing connection for this peer to avoid duplicates
+                state.connections = state.connections.filter(c => c.peer !== conn.peer);
                 state.connections.push(conn);
-                // Send current state immediately so player sees lobby
+                
                 conn.send({
                     type: 'gameState',
                     state: {
@@ -231,20 +268,28 @@
                 sendToHost({ type: 'join', name: state.playerName });
             }
         });
-        conn.on('data', (data) => handleMessage(data, conn));
+
+        conn.on('data', (data) => {
+            if (data.type !== 'heartbeat') console.log("[PEER] Received:", data.type, "from:", conn.peer);
+            handleMessage(data, conn);
+        });
+
         conn.on('close', () => {
+            console.log("[PEER] Connection closed with:", conn.peer);
             if (state.isHost) {
                 delete state.players[conn.peer];
                 state.connections = state.connections.filter(c => c.peer !== conn.peer);
                 broadcastState();
             } else {
-                alert("Disconnected from host.");
+                alert("Host disconnected.");
                 location.reload();
             }
             updateUI();
         });
+
         conn.on('error', (err) => {
-            console.error("Connection Error:", err);
+            console.error("[PEER] Connection error with:", conn.peer, err);
+            conn.close();
         });
     }
 
