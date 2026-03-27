@@ -1,16 +1,12 @@
 
+import { peerService } from './peer-service.js';
+
 (function () {
     const MAX_ROUNDS = 5;
     const ROUND_TIME = 60; // 60 seconds
     const SCORE_K = 288; // Score coefficient for km distance
 
     const state = {
-        peer: null,
-        conn: null,
-        connections: [],
-        isHost: false,
-        roomId: null,
-        playerName: "Player",
         players: {},
         currentRound: 0,
         currentPhoto: null,
@@ -60,23 +56,14 @@
             }
         },
         canPlaceMarker: () => {
-            if (!state.players[state.peer.id]) return false;
+            if (!state.players[peerService.getPeerId()]) return false;
             const hasGuessedThisRound = state.localHasGuessed && state.localLastGuessedRound === state.currentRound;
-            return state.gameState === "guessing" && !hasGuessedThisRound && !state.players[state.peer.id].hasGuessed;
+            return state.gameState === "guessing" && !hasGuessedThisRound && !state.players[peerService.getPeerId()].hasGuessed;
         }
     };
 
     let lastRoundSeen = -1;
-    let heartbeatInterval = null;
 
-    function generateShortId() {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-        let result = '';
-        for (let i = 0; i < 5; i++) {
-            result += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return result;
-    }
 
     function init() {
         if (!window.MapEngine) {
@@ -88,6 +75,70 @@
         const savedName = localStorage.getItem('fer_geoguessr_name');
         if (savedName) el.inputPlayerName.value = savedName;
         window.MapEngine.setGuessingMode(true);
+
+        // --- PeerService Event Listeners ---
+        peerService.addEventListener('roomCreated', (e) => {
+            const { roomId, playerId, playerName } = e.detail;
+            el.lobbyRoomDisplay.style.display = 'block';
+            el.lobbyInitialControls.style.display = 'none';
+            el.lobbyWaitingControls.style.display = 'block';
+            el.btnLeave.style.display = 'block';
+            el.lobbyRoomId.innerText = roomId;
+            el.roomIdText.innerText = roomId;
+            // state.playerName = playerName; // Now managed by peerService.getPlayerName()
+            addPlayer(playerId, playerName);
+            updateUI(); // Initial UI update for host
+        });
+
+        peerService.addEventListener('joinedRoom', (e) => {
+            const { roomId, playerId, playerName } = e.detail;
+            console.log("[LOBBY] Connected to host successfully.");
+            el.lobbyWaitingControls.style.display = 'block';
+            el.btnStartGame.style.display = 'none';
+            el.clientWaitMsg.style.display = 'block';
+            el.btnLeave.style.display = 'block';
+            el.lobbyRoomId.innerText = roomId;
+            el.lobbyRoomId.style.color = "var(--accent)";
+            el.roomIdText.innerText = roomId;
+            // state.playerName = playerName; // Now managed by peerService.getPlayerName()
+            // Player list will be updated via gameState event from host
+        });
+
+        peerService.addEventListener('clientConnected', (e) => {
+            const { peerId } = e.detail;
+            // The actual player details (name) will come with the join message
+            // Host will send back initial gameState to new client
+            console.log(`Client ${peerId} connected. Host will send gameState.`);
+        });
+
+        peerService.addEventListener('clientDisconnected', (e) => {
+            const { peerId } = e.detail;
+            console.log(`Client ${peerId} disconnected.`);
+            delete state.players[peerId];
+            broadcastState(); // Update all remaining clients
+        });
+
+        peerService.addEventListener('hostDisconnected', () => {
+            console.warn("[PEER] Lost connection to host.");
+            alert("Lost connection to host. Reloading.");
+            location.reload();
+        });
+
+        peerService.addEventListener('dataReceived', (e) => {
+            const { sender, data } = e.detail;
+            handleMessage(data, sender); // Re-route to existing handleMessage logic
+        });
+
+        peerService.addEventListener('error', (e) => {
+            console.error("[PEER] PeerService Error:", e.detail);
+            alert("Network Error: " + (e.detail.message || e.detail.type));
+            location.reload();
+        });
+
+        peerService.addEventListener('roomLeft', () => {
+            // Clean up UI or reset state as needed
+            location.reload(); // Simplest way to reset for now
+        });
     }
 
     window.copyRoomCode = function () {
@@ -102,235 +153,45 @@
             }
         });
     };
+    
+    // This function will now be called by the event listeners
+    function addPlayer(id, name) {
+        state.players[id] = { id: id, name: name, score: 0, totalScore: 0, hasGuessed: false, currentGuess: null };
+        updateUI();
+    }
 
     window.createRoom = function () {
-        if (state.peer) return;
+        if (peerService.peer) return; // Use peerService.peer to check if peer is already initialized
         const name = el.inputPlayerName.value.trim() || "Host";
-        state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
-        state.isHost = true;
-
-        const attemptCreate = (id) => {
-            setupPeer(id, () => {
-                el.lobbyRoomDisplay.style.display = 'block';
-                el.lobbyInitialControls.style.display = 'none';
-                el.lobbyWaitingControls.style.display = 'block';
-                el.btnLeave.style.display = 'block';
-                el.lobbyRoomId.innerText = state.peer.id;
-                el.roomIdText.innerText = state.peer.id;
-                addPlayer(state.peer.id, state.playerName);
-            }, (err) => {
-                if (err.type === 'unavailable-id') {
-                    attemptCreate(generateShortId());
-                } else {
-                    console.error("Peer Error:", err);
-                    alert("Failed to create room: " + err.type);
-                    location.reload();
-                }
-            });
-        };
-        attemptCreate(generateShortId());
+        peerService.createRoom(name);
     };
 
     window.joinRoom = function () {
-        if (state.peer) return;
+        if (peerService.peer) return;
         const name = el.inputPlayerName.value.trim() || "Player";
         const roomIdInput = el.inputRoomId.value.trim().toUpperCase();
         if (!roomIdInput) return alert("Please enter a Room ID");
-        state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
-        state.isHost = false;
-        state.roomId = roomIdInput;
         
         el.lobbyInitialControls.style.display = 'none';
         el.lobbyRoomDisplay.style.display = 'block';
         el.lobbyRoomId.innerText = "CONNECTING...";
         el.lobbyRoomId.style.color = "#f1c40f";
 
-        setupPeer(null, (myId) => {
-            console.log("[LOBBY] My client ID is:", myId);
-            console.log("[LOBBY] Attempting to connect to host:", state.roomId);
-            
-            // Peer.connect uses the default reliable WebRTC data channel
-            state.conn = state.peer.connect(state.roomId);
-            setupConnection(state.conn);
-            
-            // Connection Timeout for Join
-            const connTimeout = setTimeout(() => {
-                if (!state.conn || !state.conn.open) {
-                    console.error("[LOBBY] Connection timeout to host:", state.roomId);
-                    alert("Could not connect to room " + state.roomId + ". Check code or host status.");
-                    location.reload();
-                }
-            }, 12000);
-
-            state.conn.on('open', () => {
-                clearTimeout(connTimeout);
-                console.log("[LOBBY] Connected to host successfully.");
-                el.lobbyWaitingControls.style.display = 'block';
-                el.btnStartGame.style.display = 'none';
-                el.clientWaitMsg.style.display = 'block';
-                el.btnLeave.style.display = 'block';
-                el.lobbyRoomId.innerText = state.roomId;
-                el.lobbyRoomId.style.color = "var(--accent)";
-                el.roomIdText.innerText = state.roomId;
-            });
-
-            state.conn.on('error', (err) => {
-                clearTimeout(connTimeout);
-                console.error("[LOBBY] Connection error:", err);
-                alert("Failed to join room: " + err.message);
-                location.reload();
-            });
-        }, (err) => {
-            console.error("[LOBBY] Peer setup error:", err);
-            alert("Peer setup error: " + err.type);
-            location.reload();
-        });
+        peerService.joinRoom(name, roomIdInput);
     };
 
     window.hostStartGame = function () {
-        if (state.isHost) startNewGame();
+        if (peerService.getIsHost()) startNewGame();
     };
 
-    function setupPeer(id, onReady, onError) {
-        // PeerJS default settings are often the most robust as they handle 
-        // various network conditions using their own list of STUN/TURN servers.
-        const options = {
-            debug: 2, // Detailed WebRTC logs for diagnostics
-            secure: true
-        };
 
-        try {
-            state.peer = id ? new Peer(id, options) : new Peer(options);
-        } catch (e) {
-            console.error("[PEER] PeerJS Constructor Error:", e);
-            state.peer = new Peer({ debug: 2 });
-        }
-        
-        state.peer.on('open', (id) => {
-            console.log("[PEER] Peer object opened. ID:", id);
-            onReady(id);
-        });
-        
-        state.peer.on('connection', (conn) => { 
-            if (state.isHost) {
-                console.log("[PEER] Host received connection request from:", conn.peer);
-                setupConnection(conn); 
-            }
-        });
 
-        state.peer.on('error', (err) => {
-            console.error("[PEER] Global Peer Error:", err.type, err);
-            if (onError) onError(err);
-            else {
-                alert("Network Error: " + err.type);
-                location.reload();
-            }
-        });
 
-        // Fast heartbeat (3s) to keep connections alive through NATs
-        if (heartbeatInterval) clearInterval(heartbeatInterval);
-        heartbeatInterval = setInterval(() => {
-            if (state.isHost) {
-                broadcast({ type: 'heartbeat' });
-            } else if (state.conn && state.conn.open) {
-                sendToHost({ type: 'heartbeat' });
-            }
-        }, 3000);
-    }
-
-    function setupConnection(conn) {
-        console.log("[PEER] Initializing connection handshake for:", conn.peer);
-        
-        // Use JSON serialization for better cross-environment compatibility
-        // conn.serialization = 'json';
-
-        // Timeout for initial handshake
-        const handshakeTimeout = setTimeout(() => {
-            if (!conn.open) {
-                console.warn("[PEER] Handshake timeout for:", conn.peer, ". Closing stale connection.");
-                conn.close();
-            }
-        }, 25000);
-
-        conn.on('open', () => {
-            clearTimeout(handshakeTimeout);
-            console.log("[PEER] Data channel successfully OPEN with:", conn.peer);
-            if (state.isHost) {
-                // Remove any existing connection for this peer
-                state.connections = state.connections.filter(c => c.peer !== conn.peer);
-                state.connections.push(conn);
-                
-                conn.send({
-                    type: 'gameState',
-                    state: {
-                        players: state.players, currentRound: state.currentRound,
-                        currentPhoto: state.currentPhoto, gameState: state.gameState, timeLeft: state.timeLeft
-                    }
-                });
-            } else {
-                console.log("[PEER] Sending join request to host...");
-                sendToHost({ type: 'join', name: state.playerName });
-            }
-        });
-
-        conn.on('data', (data) => {
-            if (data.type !== 'heartbeat') console.log("[PEER] Data from", conn.peer, ":", data.type);
-            handleMessage(data, conn);
-        });
-
-        conn.on('close', () => {
-            console.log("[PEER] Connection CLOSED with:", conn.peer);
-            if (state.isHost) {
-                delete state.players[conn.peer];
-                state.connections = state.connections.filter(c => c.peer !== conn.peer);
-                broadcastState();
-            } else {
-                // Do not alert/reload immediately on client to allow for manual retry or quiet fail
-                console.warn("[PEER] Lost connection to host.");
-            }
-            updateUI();
-        });
-
-        conn.on('error', (err) => {
-            console.error("[PEER] Connection-level error with:", conn.peer, err);
-            conn.close();
-        });
-    }
-
-    function handleMessage(data, conn) {
-        switch (data.type) {
-            case 'heartbeat':
-                // Just to keep connection alive
-                break;
-            case 'join':
-                if (state.isHost) { 
-                    addPlayer(conn.peer, data.name); 
-                    broadcastState(); 
-                }
-                break;
-            case 'gameState':
-                updateFromState(data.state);
-                break;
-            case 'timerTick':
-                state.timeLeft = data.timeLeft;
-                updateUI();
-                break;
-            case 'guess':
-                if (state.isHost) handlePlayerGuess(conn.peer, data.coords);
-                break;
-            case 'nextRound':
-                if (state.isHost) startNextRound();
-                break;
-        }
-    }
-
-    function sendToHost(data) { if (state.conn && state.conn.open) state.conn.send(data); }
-    function broadcast(data) { state.connections.forEach(c => { if (c.open) c.send(data); }); }
 
     function broadcastState() {
-        broadcast({
+        peerService.broadcast({
             type: 'gameState',
             state: {
                 players: state.players, currentRound: state.currentRound,
@@ -340,7 +201,7 @@
         updateUI();
     }
 
-    function broadcastTimer() { broadcast({ type: 'timerTick', timeLeft: state.timeLeft }); updateUI(); }
+    function broadcastTimer() { peerService.broadcast({ type: 'timerTick', timeLeft: state.timeLeft }); updateUI(); }
 
     function startTimer() {
         if (state.timerInterval) clearInterval(state.timerInterval);
@@ -414,21 +275,21 @@
         if (state.gameState === "lobby") {
             el.playersListContainer.innerHTML = '';
             const playerIds = Object.keys(state.players);
-            if (playerIds.length === 0 && !state.isHost) {
+            if (playerIds.length === 0 && !peerService.getIsHost()) {
                 el.playersListContainer.innerHTML = '<div style="color:#666; font-size:10px;">WAITING FOR PLAYER LIST...</div>';
             }
             Object.values(state.players).forEach(p => {
                 const pBadge = document.createElement('div');
                 pBadge.className = 'player-badge';
-                if (p.id === (state.peer ? state.peer.id : null)) pBadge.style.color = 'var(--accent)';
+                if (p.id === peerService.getPeerId()) pBadge.style.color = 'var(--accent)';
                 pBadge.innerText = p.name.toUpperCase();
                 el.playersListContainer.appendChild(pBadge);
             });
             return;
         }
 
-        if (!state.players[state.peer.id]) return;
-        el.playerNameDisplay.innerText = `PLAYER: ${state.playerName.toUpperCase()}`;
+        if (!state.players[peerService.getPeerId()]) return;
+        el.playerNameDisplay.innerText = `PLAYER: ${peerService.getPlayerName().toUpperCase()}`;
         el.roundInfo.innerText = `ROUND ${state.currentRound} / ${MAX_ROUNDS}`;
         el.playersCountText.innerText = Object.keys(state.players).length;
         const mins = Math.floor(state.timeLeft / 60);
@@ -442,7 +303,7 @@
             Object.values(state.players).forEach(p => {
                 const pBadge = document.createElement('div');
                 pBadge.className = 'player-badge';
-                if (p.id === state.peer.id) pBadge.style.color = 'var(--accent)';
+                if (p.id === peerService.getPeerId()) pBadge.style.color = 'var(--accent)';
                 pBadge.innerText = p.name.toUpperCase();
                 el.playersListContainer.appendChild(pBadge);
             });
@@ -481,7 +342,7 @@
             el.scoreboard.style.display = 'none';
             el.btnSubmit.style.display = 'block';
             const hasGuessedThisRound = state.localHasGuessed && state.localLastGuessedRound === state.currentRound;
-            const serverSaysGuessed = state.players[state.peer.id].hasGuessed;
+            const serverSaysGuessed = state.players[peerService.getPeerId()].hasGuessed;
 
             if (hasGuessedThisRound || serverSaysGuessed) {
                 el.btnSubmit.disabled = true;
@@ -506,9 +367,9 @@
         if (!guess || state.localHasGuessed) return;
         state.localHasGuessed = true;
         state.localLastGuessedRound = state.currentRound;
-        if (state.isHost) handlePlayerGuess(state.peer.id, guess);
+        if (peerService.getIsHost()) handlePlayerGuess(peerService.getPeerId(), guess);
         else {
-            sendToHost({ type: 'guess', coords: guess });
+            peerService.sendToHost({ type: 'guess', coords: guess });
             updateUI();
         }
     };
@@ -560,7 +421,7 @@
                              <span>${sc} <span style="font-size:10px;opacity:0.7">(${p.lastDist ? p.lastDist.toFixed(1) : '-'} km)</span> <strong>${p.totalScore}</strong></span>`;
             el.scoreList.appendChild(row);
         });
-        if (state.isHost) {
+        if (peerService.getIsHost()) {
             el.hostControls.style.display = 'block';
             el.waitingMsg.style.display = 'none';
             el.hostControls.innerHTML = '';
