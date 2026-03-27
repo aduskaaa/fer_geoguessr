@@ -244,7 +244,7 @@
         console.log("[PEER] Initializing connection handshake for:", conn.peer);
         
         // Use JSON serialization for better cross-environment compatibility
-        conn.serialization = 'json';
+        // conn.serialization = 'json';
 
         // Timeout for initial handshake
         const handshakeTimeout = setTimeout(() => {
