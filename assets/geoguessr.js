@@ -194,25 +194,18 @@
     };
 
     function setupPeer(id, onReady, onError) {
-        // Explicitly defining a small set of high-performance STUN servers.
-        // Keeping it under 5 to avoid discovery delays as noted by the browser.
+        // PeerJS default settings are often the most robust as they handle 
+        // various network conditions using their own list of STUN/TURN servers.
         const options = {
-            debug: 1,
-            config: {
-                'iceServers': [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' }
-                ],
-                'iceCandidatePoolSize': 10
-            }
+            debug: 2, // Detailed WebRTC logs for diagnostics
+            secure: true
         };
 
         try {
             state.peer = id ? new Peer(id, options) : new Peer(options);
         } catch (e) {
             console.error("[PEER] PeerJS Constructor Error:", e);
-            state.peer = new Peer({ debug: 1 });
+            state.peer = new Peer({ debug: 2 });
         }
         
         state.peer.on('open', (id) => {
@@ -250,11 +243,13 @@
     function setupConnection(conn) {
         console.log("[PEER] Initializing connection handshake for:", conn.peer);
         
-        // Increased timeout (25s) for ICE gathering and WebRTC negotiation.
-        // Some networks/firewalls take longer to establish the P2P data channel.
+        // Use JSON serialization for better cross-environment compatibility
+        conn.serialization = 'json';
+
+        // Timeout for initial handshake
         const handshakeTimeout = setTimeout(() => {
             if (!conn.open) {
-                console.warn("[PEER] Handshake timeout (25s) for:", conn.peer, ". Closing stale connection.");
+                console.warn("[PEER] Handshake timeout for:", conn.peer, ". Closing stale connection.");
                 conn.close();
             }
         }, 25000);
@@ -263,7 +258,7 @@
             clearTimeout(handshakeTimeout);
             console.log("[PEER] Data channel successfully OPEN with:", conn.peer);
             if (state.isHost) {
-                // Remove any existing connection for this peer to avoid duplicates
+                // Remove any existing connection for this peer
                 state.connections = state.connections.filter(c => c.peer !== conn.peer);
                 state.connections.push(conn);
                 
@@ -292,8 +287,8 @@
                 state.connections = state.connections.filter(c => c.peer !== conn.peer);
                 broadcastState();
             } else {
-                alert("Host disconnected.");
-                location.reload();
+                // Do not alert/reload immediately on client to allow for manual retry or quiet fail
+                console.warn("[PEER] Lost connection to host.");
             }
             updateUI();
         });
