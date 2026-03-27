@@ -69,42 +69,8 @@
     let lastRoundSeen = -1;
     function init() {
         if (!window.MapEngine) {
-            // Hook into the map engine safely without touching interactive-map.js
-            const canvas = document.getElementById("map-canvas");
-            if (!canvas) {
-                setTimeout(init, 100);
-                return;
-            }
-
-            // We need access to state.zoom, state.viewX, etc from interactive-map.js... 
-            // Wait, those are hidden in an IIFE in interactive-map.js! 
-            // We can't access them directly. But we MUST implement MapEngine here.
-
-            // Actually, we don't need to actually draw anything on the map if it's too hard - the user simply 
-            // wants the streetview integration. But wait, `interactive-map.js` is clearly unfinished 
-            // because `window.MapEngine` is missing entirely. It crashes the game loop without it.
-
-            window.MapEngine = {
-                initRound: () => {
-                    window.MapEngine._guessingMode = true;
-                    window.MapEngine._pendingGuess = null;
-                    window.MapEngine._actualLocation = null;
-                    window.GeoGuessr.clearMarker();
-                },
-                getGuess: () => window.MapEngine._pendingGuess,
-                isGuessingMode: () => window.MapEngine._guessingMode,
-                setGuessingMode: (val) => { window.MapEngine._guessingMode = val; },
-                setActualLocation: (lon, lat) => { window.MapEngine._actualLocation = { lon, lat }; },
-                setPlayerGuesses: (players) => { window.MapEngine._playerGuesses = players || {}; }
-            };
-
-            // GeoGuessr API allows setting the pending guess
-            const originalOnMarkerPlaced = window.GeoGuessr.onMarkerPlaced;
-            window.GeoGuessr.onMarkerPlaced = (coords) => {
-                window.MapEngine._pendingGuess = { lon: coords.lon, lat: coords.lat };
-                originalOnMarkerPlaced(coords);
-            };
-            window.GeoGuessr.clearMarker = () => { window.MapEngine._pendingGuess = null; };
+            setTimeout(init, 100);
+            return;
         }
         el.loadingScreen.style.opacity = '0';
         setTimeout(() => el.loadingScreen.style.display = 'none', 800);
@@ -127,13 +93,11 @@
     };
 
     window.createRoom = function () {
+        if (state.peer) return;
         const name = el.inputPlayerName.value.trim() || "Host";
         state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
         state.isHost = true;
-
-        if (state.peer) state.peer.destroy();
-
         setupPeer(() => {
             el.lobbyRoomDisplay.style.display = 'block';
             el.lobbyInitialControls.style.display = 'none';
@@ -142,30 +106,24 @@
             el.lobbyRoomId.innerText = state.peer.id;
             el.roomIdText.innerText = state.peer.id;
             addPlayer(state.peer.id, state.playerName);
-            console.log("Room created with ID:", state.peer.id);
         });
     };
 
     window.joinRoom = function () {
+        if (state.peer) return;
         const name = el.inputPlayerName.value.trim() || "Player";
-        const roomId = el.inputRoomId.value.trim(); // PeerJS IDs are case-sensitive
+        const roomId = el.inputRoomId.value.trim();
         if (!roomId) return alert("Please enter a Room ID");
-
         state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
         state.isHost = false;
         state.roomId = roomId;
-
         el.lobbyInitialControls.style.display = 'none';
         el.lobbyRoomDisplay.style.display = 'block';
         el.lobbyRoomId.innerText = "CONNECTING...";
         el.lobbyRoomId.style.color = "#f1c40f";
-
-        if (state.peer) state.peer.destroy();
-
         setupPeer(() => {
-            console.log("Peer opened, connecting to:", roomId);
-            state.conn = state.peer.connect(roomId, { reliable: false });
+            state.conn = state.peer.connect(roomId, { reliable: true });
             setupConnection(state.conn);
             el.lobbyWaitingControls.style.display = 'block';
             el.btnStartGame.style.display = 'none';
@@ -183,62 +141,21 @@
 
     function setupPeer(onReady) {
         state.peer = new Peer({
-            debug: 2,
-            config: {
-                'iceServers': [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:stun3.l.google.com:19302' },
-                    { urls: 'stun:stun4.l.google.com:19302' },
-                    { urls: 'stun:stun.voiparound.com:3478' },
-                    { urls: 'stun:stun.voipbuster.com:3478' },
-                    { urls: 'stun:stun.voipstunt.com:3478' },
-                    { urls: 'stun:stun.voxgratia.org:3478' },
-                    { urls: 'stun:stun.ekiga.net:3478' },
-                    { urls: 'stun:stun.ideasip.com:3478' },
-                    { urls: 'stun:stun.schlund.de:3478' }
-                ]
-            }
+            debug: 1,
+            config: { 'iceServers': [{ url: 'stun:stun.l.google.com:19302' }, { url: 'stun:stun1.l.google.com:19302' }] }
         });
-
-        state.peer.on('open', (id) => {
-            console.log("My Peer ID:", id);
-            onReady();
-        });
-
-        state.peer.on('connection', (conn) => {
-            console.log("Incoming connection from:", conn.peer);
-            if (state.isHost) setupConnection(conn);
-        });
-
+        state.peer.on('open', (id) => onReady());
+        state.peer.on('connection', (conn) => { if (state.isHost) setupConnection(conn); });
         state.peer.on('error', (err) => {
-            console.error("PeerJS Error:", err);
-            if (err.type === 'peer-unavailable') {
-                alert("Room not found. Make sure the ID is correct.");
-                el.lobbyRoomId.innerText = "NOT FOUND";
-                el.lobbyRoomId.style.color = "#e74c3c";
-                el.lobbyInitialControls.style.display = 'block';
-                state.peer.destroy();
-                state.peer = null;
-            } else if (err.type === 'unavailable-id') {
-                alert("ID is already taken. Try again.");
-                location.reload();
-            } else if (err.type === 'webrtc' || err.message.includes('Negotiation')) {
-                alert("Connection failed due to network restrictions (Firewall/NAT). Please try a different network or browser.");
-            } else {
-                alert("Connection error: " + err.type);
-                // Don't always reload, allow user to try again
-            }
+            console.error(err);
+            alert("Connection error: " + err.type);
+            location.reload();
         });
     }
 
     function setupConnection(conn) {
         conn.on('open', () => {
-            if (state.isHost) {
-                state.connections.push(conn);
-                broadcastState(); // Broadcast updated player list once connection is truly open
-            }
+            if (state.isHost) state.connections.push(conn);
             else sendToHost({ type: 'join', name: state.playerName });
         });
         conn.on('data', (data) => handleMessage(data, conn));
@@ -255,20 +172,7 @@
     function handleMessage(data, conn) {
         switch (data.type) {
             case 'join':
-                if (state.isHost) {
-                    addPlayer(conn.peer, data.name);
-                    broadcastState();
-                    // Direct response to joiner if open, otherwise broadcast above handles it once the connection opens
-                    if (conn.open) {
-                        conn.send({
-                            type: 'gameState',
-                            state: {
-                                players: state.players, currentRound: state.currentRound,
-                                currentPhoto: state.currentPhoto, gameState: state.gameState, timeLeft: state.timeLeft
-                            }
-                        });
-                    }
-                }
+                if (state.isHost) { addPlayer(conn.peer, data.name); broadcastState(); }
                 break;
             case 'gameState':
                 updateFromState(data.state);
@@ -371,13 +275,7 @@
     }
 
     function updateUI() {
-        if (!state.peer || !state.players[state.peer.id]) {
-            if (state.gameState === "lobby" && state.peer && state.peer.id) {
-                // If we're the client but haven't been added to players yet, just show lobby modal as empty for now
-                el.playersListContainer.innerHTML = '<div class="player-badge">JOINING...</div>';
-            }
-            return;
-        }
+        if (!state.players[state.peer.id]) return;
         el.playerNameDisplay.innerText = `PLAYER: ${state.playerName.toUpperCase()}`;
         el.roundInfo.innerText = `ROUND ${state.currentRound} / ${MAX_ROUNDS}`;
         el.playersCountText.innerText = Object.keys(state.players).length;
