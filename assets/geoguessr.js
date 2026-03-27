@@ -1,5 +1,5 @@
 
-(function() {
+(function () {
     const MAX_ROUNDS = 5;
     const ROUND_TIME = 60; // 60 seconds
     const SCORE_K = 288; // Score coefficient for km distance
@@ -11,7 +11,7 @@
         isHost: false,
         roomId: null,
         playerName: "Player",
-        players: {}, 
+        players: {},
         currentRound: 0,
         currentPhoto: null,
         gameState: "lobby",
@@ -69,8 +69,42 @@
     let lastRoundSeen = -1;
     function init() {
         if (!window.MapEngine) {
-            setTimeout(init, 100);
-            return;
+            // Hook into the map engine safely without touching interactive-map.js
+            const canvas = document.getElementById("map-canvas");
+            if (!canvas) {
+                setTimeout(init, 100);
+                return;
+            }
+
+            // We need access to state.zoom, state.viewX, etc from interactive-map.js... 
+            // Wait, those are hidden in an IIFE in interactive-map.js! 
+            // We can't access them directly. But we MUST implement MapEngine here.
+
+            // Actually, we don't need to actually draw anything on the map if it's too hard - the user simply 
+            // wants the streetview integration. But wait, `interactive-map.js` is clearly unfinished 
+            // because `window.MapEngine` is missing entirely. It crashes the game loop without it.
+
+            window.MapEngine = {
+                initRound: () => {
+                    window.MapEngine._guessingMode = true;
+                    window.MapEngine._pendingGuess = null;
+                    window.MapEngine._actualLocation = null;
+                    window.GeoGuessr.clearMarker();
+                },
+                getGuess: () => window.MapEngine._pendingGuess,
+                isGuessingMode: () => window.MapEngine._guessingMode,
+                setGuessingMode: (val) => { window.MapEngine._guessingMode = val; },
+                setActualLocation: (lon, lat) => { window.MapEngine._actualLocation = { lon, lat }; },
+                setPlayerGuesses: (players) => { window.MapEngine._playerGuesses = players || {}; }
+            };
+
+            // GeoGuessr API allows setting the pending guess
+            const originalOnMarkerPlaced = window.GeoGuessr.onMarkerPlaced;
+            window.GeoGuessr.onMarkerPlaced = (coords) => {
+                window.MapEngine._pendingGuess = { lon: coords.lon, lat: coords.lat };
+                originalOnMarkerPlaced(coords);
+            };
+            window.GeoGuessr.clearMarker = () => { window.MapEngine._pendingGuess = null; };
         }
         el.loadingScreen.style.opacity = '0';
         setTimeout(() => el.loadingScreen.style.display = 'none', 800);
@@ -79,7 +113,7 @@
         window.MapEngine.setGuessingMode(true);
     }
 
-    window.copyRoomCode = function() {
+    window.copyRoomCode = function () {
         const code = el.roomIdText.innerText;
         if (!code || code === '-') return;
         navigator.clipboard.writeText(code).then(() => {
@@ -92,8 +126,8 @@
         });
     };
 
-    window.createRoom = function() {
-        if (state.peer) return; 
+    window.createRoom = function () {
+        if (state.peer) return;
         const name = el.inputPlayerName.value.trim() || "Host";
         state.playerName = name;
         localStorage.setItem('fer_geoguessr_name', name);
@@ -109,8 +143,8 @@
         });
     };
 
-    window.joinRoom = function() {
-        if (state.peer) return; 
+    window.joinRoom = function () {
+        if (state.peer) return;
         const name = el.inputPlayerName.value.trim() || "Player";
         const roomId = el.inputRoomId.value.trim();
         if (!roomId) return alert("Please enter a Room ID");
@@ -135,7 +169,7 @@
         });
     };
 
-    window.hostStartGame = function() {
+    window.hostStartGame = function () {
         if (state.isHost) startNewGame();
     };
 
@@ -146,10 +180,10 @@
         });
         state.peer.on('open', (id) => onReady());
         state.peer.on('connection', (conn) => { if (state.isHost) setupConnection(conn); });
-        state.peer.on('error', (err) => { 
-            console.error(err); 
-            alert("Connection error: " + err.type); 
-            location.reload(); 
+        state.peer.on('error', (err) => {
+            console.error(err);
+            alert("Connection error: " + err.type);
+            location.reload();
         });
     }
 
@@ -220,7 +254,7 @@
 
     function finishRound() {
         Object.keys(state.players).forEach(id => {
-            if (!state.players[id].hasGuessed) handlePlayerGuess(id, {lon: 0, lat: 0});
+            if (!state.players[id].hasGuessed) handlePlayerGuess(id, { lon: 0, lat: 0 });
         });
         state.gameState = "results";
         broadcastState();
@@ -234,7 +268,15 @@
     function startNewGame() {
         state.currentRound = 0;
         Object.values(state.players).forEach(p => { p.score = 0; p.totalScore = 0; p.hasGuessed = false; p.currentGuess = null; });
-        const photos = [...window.USER_PHOTOS];
+        const sourceData = window.streetview_data
+            ? window.streetview_data.map(sv => ({
+                name: "Streetview #" + sv.id,
+                lon: sv.lon,
+                lat: sv.lat,
+                photo: "https://raw.githubusercontent.com/aduskaaa/aduskaaa/main/imgs/streetview/" + sv.file
+            }))
+            : [...window.USER_PHOTOS];
+        const photos = [...sourceData];
         for (let i = photos.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [photos[i], photos[j]] = [photos[j], photos[i]];
@@ -299,12 +341,22 @@
             window.MapEngine.initRound();
             lastRoundSeen = state.currentRound;
             state.localHasGuessed = false; // RESET LOCAL LOCK
-        }
 
-        if (state.currentPhoto && el.photoToGuess.src !== state.currentPhoto.photo) {
-            document.getElementById('photo-loader').style.display = 'flex';
-            el.photoToGuess.style.opacity = '0';
-            el.photoToGuess.src = state.currentPhoto.photo;
+            if (state.currentPhoto) {
+                document.getElementById('photo-loader').style.display = 'flex';
+                el.photoToGuess.style.opacity = '0';
+                el.photoToGuess.src = state.currentPhoto.photo;
+
+                // Check if this is a streetview photo
+                if (state.currentPhoto.photo.includes('streetview')) {
+                    const svIdMatch = state.currentPhoto.name.match(/#(\d+)/);
+                    if (svIdMatch && window.MapEngine && window.MapEngine.findBestStreetViewOptions) {
+                        renderStreetViewOverlay(parseInt(svIdMatch[1]), state.currentPhoto.lon, state.currentPhoto.lat);
+                    }
+                } else {
+                    clearStreetViewOverlay();
+                }
+            }
         }
 
         if (state.gameState === "guessing") {
@@ -312,7 +364,7 @@
             el.btnSubmit.style.display = 'block';
             const hasGuessedThisRound = state.localHasGuessed && state.localLastGuessedRound === state.currentRound;
             const serverSaysGuessed = state.players[state.peer.id].hasGuessed;
-            
+
             if (hasGuessedThisRound || serverSaysGuessed) {
                 el.btnSubmit.disabled = true;
                 el.btnSubmit.innerText = "Guessed!";
@@ -331,7 +383,7 @@
         }
     }
 
-    window.submitGuess = function() {
+    window.submitGuess = function () {
         const guess = window.MapEngine.getGuess();
         if (!guess || state.localHasGuessed) return;
         state.localHasGuessed = true;
@@ -371,10 +423,10 @@
         const R = 6371;
         const dLat = (lat2 - lat1) * Math.PI / 180;
         const dLon = (lon2 - lon1) * Math.PI / 180;
-        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                  Math.sin(dLon/2) * Math.sin(dLon/2);
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
     function showScoreboard() {
@@ -386,8 +438,8 @@
             row.className = 'score-row';
             if (idx === 0 && state.gameState === "finished") row.style.color = "#f1c40f";
             let sc = (p.score === 0) ? `<span style="color:#e74c3c">MISS</span>` : `+${p.score}`;
-            row.innerHTML = `<span>${idx+1}. ${p.name} ${idx===0&&state.gameState==="finished"?'👑':''}</span>
-                             <span>${sc} <span style="font-size:10px;opacity:0.7">(${p.lastDist?p.lastDist.toFixed(1):'-'} km)</span> <strong>${p.totalScore}</strong></span>`;
+            row.innerHTML = `<span>${idx + 1}. ${p.name} ${idx === 0 && state.gameState === "finished" ? '👑' : ''}</span>
+                             <span>${sc} <span style="font-size:10px;opacity:0.7">(${p.lastDist ? p.lastDist.toFixed(1) : '-'} km)</span> <strong>${p.totalScore}</strong></span>`;
             el.scoreList.appendChild(row);
         });
         if (state.isHost) {
@@ -408,11 +460,170 @@
             el.hostControls.appendChild(btn);
         } else {
             el.hostControls.style.display = 'none';
-            el.waitingMsg.style.display = 'block';
+            if (state.gameState !== "finished") el.waitingMsg.style.display = 'block';
             el.waitingMsg.innerText = state.gameState === "finished" ? "Waiting for host to restart..." : "WAITING FOR HOST...";
         }
     }
 
-    window.hostNextRound = function() { if (state.isHost) startNextRound(); };
+    // --- STREETVIEW OVERLAY ENGINE ---
+    let svOverlayContainer = null;
+    function getOrCreateSVOverlay() {
+        if (!svOverlayContainer) {
+            svOverlayContainer = document.createElement('div');
+            svOverlayContainer.id = 'geoguessr-sv-overlay';
+            svOverlayContainer.style.position = 'absolute';
+            svOverlayContainer.style.inset = '0';
+            svOverlayContainer.style.pointerEvents = 'none';
+            svOverlayContainer.style.zIndex = '500'; // above photo, below map
+            document.getElementById('map-root').appendChild(svOverlayContainer);
+        }
+        return svOverlayContainer;
+    }
+
+    function clearStreetViewOverlay() {
+        if (svOverlayContainer) {
+            svOverlayContainer.innerHTML = '';
+        }
+    }
+
+    function renderStreetViewOverlay(svId, lon, lat, currentRotation = null) {
+        if (!window.streetview_data) return;
+        const svNode = window.streetview_data.find(s => s.id === svId);
+        if (!svNode) return;
+
+        const overlay = getOrCreateSVOverlay();
+        overlay.innerHTML = ''; // clear previous
+
+        // Get navigation logic from the map engine
+        const svCurrentRotation = currentRotation !== null ? currentRotation : (svNode.truck_rotation * Math.PI * 2);
+        const navData = window.MapEngine.findBestStreetViewOptions(svId, lon, lat, svCurrentRotation);
+        if (!navData) return;
+
+        const bestOptions = navData.bestOptions;
+        const taBestIndex = navData.taBestIndex;
+
+        // Construct the 3D-perspective ground navigation cluster
+        const clusterWrap = document.createElement('div');
+        clusterWrap.style.cssText = `
+            position: absolute;
+            bottom: 15%;
+            left: 50%;
+            width: 0px;
+            height: 0px;
+            transform: translateX(-50%) perspective(800px) rotateX(65deg);
+            pointer-events: none;
+        `;
+
+        // Turn Around Button in exact center
+        const centerTa = document.createElement('div');
+        centerTa.style.cssText = `
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80px; height: 80px;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255,255,255,0.7);
+            border-radius: 50%;
+            pointer-events: auto;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            color: #fff; font-size: 32px; font-weight: bold;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.8), inset 0 0 20px rgba(255,255,255,0.2);
+        `;
+        centerTa.innerHTML = '&#x21bb;';
+        centerTa.onclick = () => {
+            if (taBestIndex !== -1) navigateToStreetView(taBestIndex);
+        };
+        centerTa.onmouseover = () => { centerTa.style.transform = 'translate(-50%, -50%) scale(1.15)'; centerTa.style.background = 'rgba(255,255,255,0.3)'; };
+        centerTa.onmouseout = () => { centerTa.style.transform = 'translate(-50%, -50%) scale(1)'; centerTa.style.background = 'rgba(0,0,0,0.6)'; };
+        clusterWrap.appendChild(centerTa);
+
+        // Sleek Map-style ground chevron
+        const modernIcon = `<svg width="50" height="50" viewBox="0 0 100 100" style="filter: drop-shadow(0 -5px 15px rgba(255,255,255,0.8)) drop-shadow(0 5px 5px rgba(0,0,0,0.9));"><path d="M10,80 L50,15 L90,80 L50,60 Z" fill="rgba(255,255,255,1)" stroke="rgba(0,0,0,0.4)" stroke-width="2"/></svg>`;
+
+        ['forward', 'left', 'right', 'backward'].forEach(dir => {
+            if (bestOptions[dir].index !== -1) {
+                let rotRad = bestOptions[dir].angle;
+                let rotDeg = rotRad * 180 / Math.PI;
+
+                const pathLine = document.createElement('div');
+                pathLine.style.cssText = `
+                    position: absolute;
+                    bottom: 50%; left: 50%;
+                    width: 8px; height: 180px;
+                    background: linear-gradient(to top, rgba(255,255,255,0) 0%, rgba(255,255,255,0.9) 100%);
+                    transform-origin: bottom center;
+                    transform: translateX(-50%) rotate(${rotDeg}deg) translateY(-50px);
+                    border-radius: 4px;
+                    box-shadow: 0 0 20px rgba(0,0,0,0.8);
+                    opacity: 0.6;
+                    transition: all 0.3s ease;
+                    pointer-events: none;
+                `;
+                clusterWrap.appendChild(pathLine);
+
+                const arrowContainer = document.createElement('div');
+                arrowContainer.style.cssText = `
+                    position: absolute; 
+                    top: 50%; left: 50%;
+                    cursor: pointer; 
+                    pointer-events: auto; 
+                    opacity: 0.9; 
+                    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
+                    display: inline-flex; 
+                    transform: translate(-50%, -50%) rotate(${rotDeg}deg) translateY(-235px);
+                `;
+                arrowContainer.innerHTML = modernIcon;
+
+                arrowContainer.onmouseover = () => {
+                    arrowContainer.style.opacity = '1';
+                    arrowContainer.style.transform = `translate(-50%, -50%) rotate(${rotDeg}deg) translateY(-235px) scale(1.4)`;
+                    pathLine.style.opacity = '1';
+                    pathLine.style.background = 'linear-gradient(to top, rgba(255,215,0,0) 0%, rgba(255,215,0,0.9) 100%)';
+                    pathLine.style.boxShadow = '0 0 25px rgba(255,215,0,0.9)';
+                };
+                arrowContainer.onmouseout = () => {
+                    arrowContainer.style.opacity = '0.9';
+                    arrowContainer.style.transform = `translate(-50%, -50%) rotate(${rotDeg}deg) translateY(-235px) scale(1)`;
+                    pathLine.style.opacity = '0.6';
+                    pathLine.style.background = 'linear-gradient(to top, rgba(255,255,255,0) 0%, rgba(255,255,255,0.9) 100%)';
+                    pathLine.style.boxShadow = '0 0 20px rgba(0,0,0,0.8)';
+                };
+
+                arrowContainer.onclick = () => {
+                    // Current rotation of this node plus the relative angle of the arrow gives the true world bearing we clicked
+                    const moveBearing = svCurrentRotation + bestOptions[dir].angle;
+                    navigateToStreetView(bestOptions[dir].index, moveBearing);
+                };
+
+                clusterWrap.appendChild(arrowContainer);
+            }
+        });
+
+        overlay.appendChild(clusterWrap);
+    }
+
+    function navigateToStreetView(index, targetBearing) {
+        if (!window.MapEngine || !window.MapEngine.getStreetViewData) return;
+        const svData = window.MapEngine.getStreetViewData(index);
+        if (!svData) return;
+
+        // Visual fade
+        document.getElementById('photo-loader').style.display = 'flex';
+        el.photoToGuess.style.opacity = '0';
+
+        setTimeout(() => {
+            el.photoToGuess.src = `https://raw.githubusercontent.com/aduskaaa/aduskaaa/main/imgs/streetview/${svData.properties.file}`;
+            const newLon = svData.geometry.coordinates[0];
+            const newLat = svData.geometry.coordinates[1];
+
+            // Pass the bearing we wanted to look at, so the new node bases its "forward" relative to that bearing
+            renderStreetViewOverlay(svData.properties.id, newLon, newLat, targetBearing);
+        }, 150);
+    }
+
+    window.hostNextRound = function () { if (state.isHost) startNextRound(); };
     init();
 })();

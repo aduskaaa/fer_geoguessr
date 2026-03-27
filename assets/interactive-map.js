@@ -38,7 +38,8 @@
             cities: [],
             pois: [],
             photos: [],
-            roadNames: []
+            roadNames: [],
+            streetview: []
         },
         toggles: {
             photos: true,
@@ -46,9 +47,9 @@
             background: true
         },
         calibration: {
-            ox: 0, 
+            ox: 0,
             oy: 0,
-            sx: 45.0,  
+            sx: 45.0,
             sy: -110.0,
             rot: 0
         },
@@ -112,7 +113,126 @@
             // ETS2 coordinates are roughly linear
             const dx = lon1 - lon2;
             const dy = lat1 - lat2;
-            return Math.sqrt(dx*dx + dy*dy);
+            return Math.sqrt(dx * dx + dy * dy);
+        },
+        getHaversineDistance: (lat1, lon1, lat2, lon2) => {
+            const R = 6371; // km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        },
+        getStreetViewData: (index) => state.layers.streetview[index],
+        findBestStreetViewOptions: (svId, currentLon, currentLat, currentRotation) => {
+            const pCenter = transform(currentLon, currentLat);
+
+            // Compute actual visual orientation based on sequence
+            let actualTruckRotation = currentRotation;
+            let nextSV = state.layers.streetview.find(s => s.properties.id === svId + 1);
+            if (!nextSV) nextSV = state.layers.streetview.find(s => s.properties.id === svId - 1);
+            if (nextSV) {
+                const pNext = transform(nextSV.geometry.coordinates[0], nextSV.geometry.coordinates[1]);
+                let dy = pNext.y - pCenter.y;
+                let dx = pNext.x - pCenter.x;
+                actualTruckRotation = Math.atan2(dx, -dy);
+                if (nextSV.properties.id === svId - 1) actualTruckRotation += Math.PI;
+            }
+
+            let targetTaRotation = currentRotation + Math.PI;
+            if (targetTaRotation > 2 * Math.PI) targetTaRotation -= 2 * Math.PI;
+
+            let taBestIndex = -1;
+            let taMinDiff = Infinity;
+
+            let bestOptions = {
+                forward: { index: -1, score: -Infinity, angle: 0 },
+                left: { index: -1, score: -Infinity, angle: 0 },
+                right: { index: -1, score: -Infinity, angle: 0 },
+                backward: { index: -1, score: -Infinity, angle: 0 }
+            };
+
+            state.layers.streetview.forEach((sv, index) => {
+                const svIdTarget = sv.properties.id;
+                if (svIdTarget === svId) return;
+
+                const svLon = sv.geometry.coordinates[0];
+                const svLat = sv.geometry.coordinates[1];
+
+                if (Math.abs(svLon - currentLon) < 0.00001 && Math.abs(svLat - currentLat) < 0.00001) return;
+
+                const distance = window.MapEngine.getHaversineDistance(currentLat, currentLon, svLat, svLon);
+
+                // Movement constraints
+                const isSequence = Math.abs(svIdTarget - svId) === 1;
+                if (!isSequence && distance > 0.8) return;
+                if (isSequence && distance > 10.0) return;
+
+                const targetRotation = sv.properties.truck_rotation * Math.PI * 2;
+
+                // Turn around logic
+                if (distance < 0.8) {
+                    const rotationDiff = Math.abs(targetRotation - targetTaRotation);
+                    const normalizedRotationDiff = Math.min(rotationDiff, 2 * Math.PI - rotationDiff);
+                    if (normalizedRotationDiff < taMinDiff && normalizedRotationDiff < Math.PI / 2) {
+                        taMinDiff = normalizedRotationDiff;
+                        taBestIndex = index;
+                    }
+                }
+
+                // Bearings calculate strictly on the visual Canvas plane
+                const pTarget = transform(svLon, svLat);
+                let tdy = pTarget.y - pCenter.y;
+                let tdx = pTarget.x - pCenter.x;
+                let bearing = Math.atan2(tdx, -tdy);
+                if (bearing < 0) bearing += 2 * Math.PI;
+
+                let relativeAngle = bearing - actualTruckRotation;
+                if (relativeAngle > Math.PI) relativeAngle -= 2 * Math.PI;
+                if (relativeAngle < -Math.PI) relativeAngle += 2 * Math.PI;
+
+                let rotDiff = targetRotation - currentRotation;
+                if (rotDiff > Math.PI) rotDiff -= 2 * Math.PI;
+                if (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
+                const absRotDiff = Math.abs(rotDiff);
+
+                if (svIdTarget === svId + 1) {
+                    bestOptions.forward = { index, score: Infinity, angle: relativeAngle };
+                    return;
+                }
+                if (svIdTarget === svId - 1) {
+                    bestOptions.backward = { index, score: Infinity, angle: relativeAngle };
+                    return;
+                }
+
+                let score = - (distance * 1000);
+                if (Math.abs(relativeAngle) < Math.PI / 3) {
+                    if (absRotDiff < Math.PI / 2) {
+                        let fScore = score - absRotDiff * 10;
+                        if (fScore > bestOptions.forward.score) {
+                            bestOptions.forward = { index, score: fScore, angle: relativeAngle };
+                        }
+                    }
+                } else if (relativeAngle >= Math.PI / 3 && relativeAngle <= 2 * Math.PI / 3) {
+                    if (score > bestOptions.right.score) {
+                        bestOptions.right = { index, score, angle: relativeAngle };
+                    }
+                } else if (relativeAngle <= -Math.PI / 3 && relativeAngle >= -2 * Math.PI / 3) {
+                    if (score > bestOptions.left.score) {
+                        bestOptions.left = { index, score, angle: relativeAngle };
+                    }
+                } else if (Math.abs(relativeAngle) > 2 * Math.PI / 3) {
+                    if (absRotDiff < Math.PI / 2) {
+                        let bScore = score - absRotDiff * 10;
+                        if (bScore > bestOptions.backward.score) {
+                            bestOptions.backward = { index, score: bScore, angle: relativeAngle };
+                        }
+                    }
+                }
+            });
+
+            return { bestOptions, taBestIndex };
         },
         focusCoords: (lon, lat, zoom = 1.0) => {
             const p = transform(lon, lat);
@@ -122,10 +242,10 @@
             requestAnimationFrame(render);
         }
     };
-    
+
     async function start() {
         if (window.FER_DATA_LOADING) await window.FER_DATA_LOADING;
-        
+
         if (!window.FER_DATA || !window.FER_DATA.features) {
             console.error('Error: window.FER_DATA (from fer-geojson.js) failed to load or is empty. Map data is critical for proper functionality.');
             setTimeout(start, 200); // Re-try loading
@@ -138,7 +258,7 @@
         bgImg.onload = () => {
             state.background.image = bgImg;
             state.background.isLoaded = true;
-            
+
             // Calculate dimensions to match original image size (1:1 pixel scale at zoom 1.0)
             // This prevents stretching/squishing by respecting the map's projection calibration
             if (state.calibration.sx !== 0 && state.calibration.sy !== 0) {
@@ -146,7 +266,7 @@
                 state.background.widthInMapUnits = (bgImg.width / state.calibration.sx) * scaleFactor;
                 state.background.heightInMapUnits = (bgImg.height / Math.abs(state.calibration.sy)) * scaleFactor;
             }
-            
+
             console.log(`Background Debug: Image loaded. Dimensions set to ${state.background.widthInMapUnits.toFixed(4)} x ${state.background.heightInMapUnits.toFixed(4)} map units.`);
             requestAnimationFrame(render); // Request a re-render once image loads
         };
@@ -158,6 +278,7 @@
         processData(window.FER_DATA.features);
         processMarkers();
         processRoadNames();
+        processStreetView();
         initializeView();
         setupToggles();
     }
@@ -167,17 +288,36 @@
             window.USER_PHOTOS.forEach(photo => {
                 const feature = {
                     type: "Feature",
-                    properties: { 
-                        type: "photo", 
-                        name: photo.name, 
+                    properties: {
+                        type: "photo",
+                        name: photo.name,
                         desc: photo.desc,
                         user: photo.user,
-                        photo: photo.photo 
+                        photo: photo.photo
                     },
                     geometry: { type: "Point", coordinates: [photo.lon, photo.lat] },
                     _bounds: { minX: photo.lon, maxX: photo.lon, minY: photo.lat, maxY: photo.lat }
                 };
                 state.layers.photos.push(feature);
+            });
+        }
+    }
+
+    function processStreetView() {
+        if (window.streetview_data) {
+            window.streetview_data.forEach(sv => {
+                const feature = {
+                    type: "Feature",
+                    properties: {
+                        type: "streetview",
+                        id: sv.id,
+                        file: sv.file,
+                        truck_rotation: sv.truck_rotation
+                    },
+                    geometry: { type: "Point", coordinates: [sv.lon, sv.lat] },
+                    _bounds: { minX: sv.lon, maxX: sv.lon, minY: sv.lat, maxY: sv.lat }
+                };
+                state.layers.streetview.push(feature);
             });
         }
     }
@@ -249,7 +389,7 @@
             if (!feature.geometry) return;
             const bounds = getBounds(feature.geometry);
             feature._bounds = bounds;
-            
+
             const type = feature.properties.type;
             let layerKey = type + 's';
             if (type === 'city') layerKey = 'cities';
@@ -305,21 +445,21 @@
             const cy = (totalMinY + totalMaxY) / 2;
             state.calibration.ox = -cx;
             state.calibration.oy = -cy;
-            
+
             const widthPx = (totalMaxX - totalMinX) * state.calibration.sx;
             const heightPx = (totalMaxY - totalMinY) * Math.abs(state.calibration.sy);
-            
+
             const zoomX = canvas.width / widthPx;
             const zoomY = canvas.height / heightPx;
             state.zoom = Math.min(zoomX, zoomY) * 0.8;
-            
+
             state.viewX = canvas.width / 2;
             state.viewY = canvas.height / 2;
         }
-        
+
         loader.style.opacity = '0';
         setTimeout(() => loader.style.display = 'none', 800);
-        
+
         requestAnimationFrame(render);
     }
 
@@ -330,7 +470,7 @@
         canvas.height = container.clientHeight;
         requestAnimationFrame(render);
     }
-    
+
     // Watch for container resize (when user hovers/expands it)
     const resizeObserver = new ResizeObserver(() => {
         resize();
@@ -341,9 +481,9 @@
     resize();
 
     let isDragging = false, lastX, lastY;
-    canvas.onmousedown = (e) => { 
-        if(e.button !== 0) return;
-        isDragging = true; lastX = e.clientX; lastY = e.clientY; 
+    canvas.onmousedown = (e) => {
+        if (e.button !== 0) return;
+        isDragging = true; lastX = e.clientX; lastY = e.clientY;
         canvas.style.cursor = 'grabbing';
     };
     window.onmouseup = () => { isDragging = false; canvas.style.cursor = 'grab'; };
@@ -362,7 +502,7 @@
         const rect = canvas.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
-        
+
         const worldX = (mouseX - state.viewX) / state.zoom;
         const worldY = (mouseY - state.viewY) / state.zoom;
         state.zoom *= factor;
@@ -382,7 +522,7 @@
         // Invert Scaling
         const rx = px / c.sx;
         const ry = py / c.sy;
-        
+
         // Invert Rotation (simplified for rot=0)
         let tx = rx, ty = ry;
         if (c.rot !== 0) {
@@ -416,12 +556,12 @@
             requestAnimationFrame(render);
             return;
         }
-        
+
         state.layers.photos.forEach(f => {
             const p = transform(f.geometry.coordinates[0], f.geometry.coordinates[1]);
             const sx = p.x * state.zoom + state.viewX;
             const sy = p.y * state.zoom + state.viewY;
-            const dist = Math.sqrt((mouseX - sx)**2 + (mouseY - sy)**2);
+            const dist = Math.sqrt((mouseX - sx) ** 2 + (mouseY - sy) ** 2);
             if (dist < 15 && state.toggles.photos) {
                 // Open Photo Modal
                 const modal = document.getElementById('photo-modal');
@@ -434,7 +574,7 @@
                 title.innerText = f.properties.name.toUpperCase();
                 desc.innerText = f.properties.desc;
                 user.innerText = `BY ${f.properties.user.toUpperCase()}`;
-                
+
                 modal.style.display = 'flex';
             }
         });
@@ -477,7 +617,7 @@
             const width = bg.widthInMapUnits * state.calibration.sx;
             // Use absolute value for height scaling as sy is negative
             const height = bg.heightInMapUnits * Math.abs(state.calibration.sy);
-            
+
             ctx.drawImage(
                 bg.image,
                 p.x - width / 2,
@@ -489,7 +629,7 @@
 
         // 1. Map Areas
         const areaColors = { 0: "#1a1a1a", 1: "#1e272e", 2: "#2d3436", 3: "#000000", 4: "#218c74" };
-        state.layers.mapAreas.sort((a,b) => (a.properties.zIndex || 0) - (b.properties.zIndex || 0));
+        state.layers.mapAreas.sort((a, b) => (a.properties.zIndex || 0) - (b.properties.zIndex || 0));
         state.layers.mapAreas.forEach(f => {
             if (!isVisible(f._bounds)) return;
             ctx.fillStyle = areaColors[f.properties.color] || areaColors[0];
@@ -499,7 +639,7 @@
 
         // 2. Prefabs
         const prefabColors = { 0: "#2c3e50", 1: "#34495e", 2: "#57606f", 3: "#a4b0be", 4: "#e67e22" };
-        state.layers.prefabs.sort((a,b) => (a.properties.zIndex || 0) - (b.properties.zIndex || 0));
+        state.layers.prefabs.sort((a, b) => (a.properties.zIndex || 0) - (b.properties.zIndex || 0));
         state.layers.prefabs.forEach(f => {
             if (!isVisible(f._bounds)) return;
             const isHouse = f.properties.color === 2 || f.properties.color === 3;
@@ -527,7 +667,7 @@
         ctx.beginPath();
         state.layers.ferries.forEach(f => { if (!isVisible(f._bounds)) return; drawGeometry(f.geometry); });
         ctx.strokeStyle = "#4aa3df"; ctx.lineWidth = (detailLevel === 0 ? 4 : 2) / zoom;
-        ctx.setLineDash([8/zoom, 4/zoom]); ctx.stroke(); ctx.setLineDash([]);
+        ctx.setLineDash([8 / zoom, 4 / zoom]); ctx.stroke(); ctx.setLineDash([]);
 
         // 5. POIs (Ferry Ports)
         state.layers.pois.forEach(f => {
@@ -535,8 +675,8 @@
             const p = transform(f.geometry.coordinates[0], f.geometry.coordinates[1]);
             if (f.properties.poiType === 'ferry') {
                 const size = 7 / zoom; ctx.fillStyle = "#3498db"; ctx.strokeStyle = "#2980b9"; ctx.lineWidth = 2 / zoom;
-                ctx.beginPath(); ctx.arc(p.x, p.y, size/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-                if (zoom > 0.5) { ctx.font = `italic bold ${10/zoom}px sans-serif`; ctx.fillStyle = "#3498db"; ctx.fillText("FERRY: " + (f.properties.poiName || ""), p.x, p.y + 12/zoom); }
+                ctx.beginPath(); ctx.arc(p.x, p.y, size / 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                if (zoom > 0.5) { ctx.font = `italic bold ${10 / zoom}px sans-serif`; ctx.fillStyle = "#3498db"; ctx.fillText("FERRY: " + (f.properties.poiName || ""), p.x, p.y + 12 / zoom); }
             }
         });
 
@@ -547,8 +687,8 @@
                 const p = transform(f.geometry.coordinates[0], f.geometry.coordinates[1]);
                 const size = 8 / zoom;
                 ctx.fillStyle = "#27ae60"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5 / zoom;
-                ctx.beginPath(); ctx.moveTo(p.x - size/2, p.y - size/2); ctx.lineTo(p.x + size/2, p.y - size/2); ctx.lineTo(p.x + size/2, p.y + size/2); ctx.lineTo(p.x - size/2, p.y + size/2); ctx.closePath(); ctx.fill(); ctx.stroke();
-                if (zoom > 1.0) { ctx.font = `bold ${9/zoom}px sans-serif`; ctx.fillStyle = "#2ecc71"; ctx.fillText(f.properties.name, p.x, p.y + 12/zoom); }
+                ctx.beginPath(); ctx.moveTo(p.x - size / 2, p.y - size / 2); ctx.lineTo(p.x + size / 2, p.y - size / 2); ctx.lineTo(p.x + size / 2, p.y + size / 2); ctx.lineTo(p.x - size / 2, p.y + size / 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+                if (zoom > 1.0) { ctx.font = `bold ${9 / zoom}px sans-serif`; ctx.fillStyle = "#2ecc71"; ctx.fillText(f.properties.name, p.x, p.y + 12 / zoom); }
             });
         }
 
@@ -557,7 +697,7 @@
             state.layers.roadNames.forEach(f => {
                 if (!isVisible(f._bounds)) return;
                 const p = transform(f.geometry.coordinates[0], f.geometry.coordinates[1]);
-                
+
                 ctx.save();
                 ctx.translate(p.x, p.y);
                 if (f.properties.rotation) {
@@ -570,7 +710,7 @@
                     const imgHeight = img.height / (zoom * 2); // Default image size
                     ctx.drawImage(img, -imgWidth / 2, -imgHeight / 2, imgWidth, imgHeight);
                 } else if (f.properties.name) {
-                    ctx.font = `bold ${12/zoom}px sans-serif`; // Default font size
+                    ctx.font = `bold ${12 / zoom}px sans-serif`; // Default font size
                     ctx.fillStyle = "#fff";
                     ctx.strokeStyle = "#000";
                     ctx.lineWidth = 2 / zoom;
@@ -588,10 +728,10 @@
         state.layers.cities.forEach(f => {
             if (!isVisible(f._bounds)) return;
             const p = transform(f.geometry.coordinates[0], f.geometry.coordinates[1]);
-            ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(p.x, p.y, 4 / zoom, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(p.x, p.y, 4 / zoom, 0, Math.PI * 2); ctx.fill();
             if (zoom > 0.05) {
-                ctx.save(); ctx.font = `bold ${13/zoom}px sans-serif`; ctx.fillStyle = "#fff"; ctx.strokeStyle = "#000"; ctx.lineWidth = 4 / zoom;
-                ctx.strokeText(f.properties.name.toUpperCase(), p.x, p.y - 12/zoom); ctx.fillText(f.properties.name.toUpperCase(), p.x, p.y - 12/zoom); ctx.restore();
+                ctx.save(); ctx.font = `bold ${13 / zoom}px sans-serif`; ctx.fillStyle = "#fff"; ctx.strokeStyle = "#000"; ctx.lineWidth = 4 / zoom;
+                ctx.strokeText(f.properties.name.toUpperCase(), p.x, p.y - 12 / zoom); ctx.fillText(f.properties.name.toUpperCase(), p.x, p.y - 12 / zoom); ctx.restore();
             }
         });
 
@@ -602,12 +742,12 @@
                 const p = transform(state.guessing.guessMarker.lon, state.guessing.guessMarker.lat);
                 const size = 15 / zoom;
                 ctx.fillStyle = "#e74c3c"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2 / zoom;
-                ctx.beginPath(); 
-                ctx.moveTo(p.x, p.y - size); 
-                ctx.lineTo(p.x - size/2, p.y - size/2); 
-                ctx.lineTo(p.x, p.y); 
-                ctx.lineTo(p.x + size/2, p.y - size/2); 
-                ctx.closePath(); 
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y - size);
+                ctx.lineTo(p.x - size / 2, p.y - size / 2);
+                ctx.lineTo(p.x, p.y);
+                ctx.lineTo(p.x + size / 2, p.y - size / 2);
+                ctx.closePath();
                 ctx.fill(); ctx.stroke();
             }
 
@@ -617,13 +757,13 @@
                     const p = transform(m.lon, m.lat);
                     const size = 10 / zoom;
                     ctx.fillStyle = "rgba(231, 76, 60, 0.7)"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1 / zoom;
-                    ctx.beginPath(); ctx.arc(p.x, p.y, size/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-                    
+                    ctx.beginPath(); ctx.arc(p.x, p.y, size / 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
                     if (zoom > 0.5) {
-                        ctx.font = `bold ${8/zoom}px sans-serif`;
+                        ctx.font = `bold ${8 / zoom}px sans-serif`;
                         ctx.fillStyle = "#fff";
                         ctx.textAlign = "center";
-                        ctx.fillText(m.name, p.x, p.y + 12/zoom);
+                        ctx.fillText(m.name, p.x, p.y + 12 / zoom);
                     }
 
                     // Draw line to actual if showing results
@@ -643,7 +783,7 @@
                 const actual = transform(state.guessing.actualMarker.lon, state.guessing.actualMarker.lat);
                 const size = 12 / zoom;
                 ctx.fillStyle = "#27ae60"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2 / zoom;
-                ctx.beginPath(); ctx.arc(actual.x, actual.y, size/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+                ctx.beginPath(); ctx.arc(actual.x, actual.y, size / 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
             }
         }
 
@@ -658,8 +798,8 @@
         else if (geom.type === 'MultiPolygon') coords.forEach(poly => poly.forEach(ring => drawLine(ring, true)));
     }
 
-    function drawLine(points, closed=false) {
-        if(points.length < 2) return;
+    function drawLine(points, closed = false) {
+        if (points.length < 2) return;
         const p0 = transform(points[0][0], points[0][1]); ctx.moveTo(p0.x, p0.y);
         for (let i = 1; i < points.length; i++) { const p = transform(points[i][0], points[i][1]); ctx.lineTo(p.x, p.y); }
         if (closed) ctx.closePath();
