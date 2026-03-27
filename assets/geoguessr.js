@@ -194,34 +194,41 @@
     };
 
     function setupPeer(id, onReady, onError) {
-        // Using PeerJS defaults (no 'config' provided) is often the most reliable way 
-        // to handle various network conditions as they maintain their own list of 
-        // STUN/TURN servers.
+        // Explicitly defining a small set of high-performance STUN servers.
+        // Keeping it under 5 to avoid discovery delays as noted by the browser.
         const options = {
-            debug: 1
+            debug: 1,
+            config: {
+                'iceServers': [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ],
+                'iceCandidatePoolSize': 10
+            }
         };
 
         try {
             state.peer = id ? new Peer(id, options) : new Peer(options);
         } catch (e) {
-            console.error("PeerJS Constructor Error:", e);
+            console.error("[PEER] PeerJS Constructor Error:", e);
             state.peer = new Peer({ debug: 1 });
         }
         
         state.peer.on('open', (id) => {
-            console.log("[PEER] My ID is:", id);
+            console.log("[PEER] Peer object opened. ID:", id);
             onReady(id);
         });
         
         state.peer.on('connection', (conn) => { 
             if (state.isHost) {
-                console.log("[PEER] Incoming connection from:", conn.peer);
+                console.log("[PEER] Host received connection request from:", conn.peer);
                 setupConnection(conn); 
             }
         });
 
         state.peer.on('error', (err) => {
-            console.error("[PEER] Error:", err.type, err);
+            console.error("[PEER] Global Peer Error:", err.type, err);
             if (onError) onError(err);
             else {
                 alert("Network Error: " + err.type);
@@ -241,17 +248,20 @@
     }
 
     function setupConnection(conn) {
-        // Timeout if handshake takes too long
+        console.log("[PEER] Initializing connection handshake for:", conn.peer);
+        
+        // Increased timeout (25s) for ICE gathering and WebRTC negotiation.
+        // Some networks/firewalls take longer to establish the P2P data channel.
         const handshakeTimeout = setTimeout(() => {
             if (!conn.open) {
-                console.warn("[PEER] Handshake timeout for:", conn.peer);
+                console.warn("[PEER] Handshake timeout (25s) for:", conn.peer, ". Closing stale connection.");
                 conn.close();
             }
-        }, 8000);
+        }, 25000);
 
         conn.on('open', () => {
             clearTimeout(handshakeTimeout);
-            console.log("[PEER] Connection open with:", conn.peer);
+            console.log("[PEER] Data channel successfully OPEN with:", conn.peer);
             if (state.isHost) {
                 // Remove any existing connection for this peer to avoid duplicates
                 state.connections = state.connections.filter(c => c.peer !== conn.peer);
@@ -265,17 +275,18 @@
                     }
                 });
             } else {
+                console.log("[PEER] Sending join request to host...");
                 sendToHost({ type: 'join', name: state.playerName });
             }
         });
 
         conn.on('data', (data) => {
-            if (data.type !== 'heartbeat') console.log("[PEER] Received:", data.type, "from:", conn.peer);
+            if (data.type !== 'heartbeat') console.log("[PEER] Data from", conn.peer, ":", data.type);
             handleMessage(data, conn);
         });
 
         conn.on('close', () => {
-            console.log("[PEER] Connection closed with:", conn.peer);
+            console.log("[PEER] Connection CLOSED with:", conn.peer);
             if (state.isHost) {
                 delete state.players[conn.peer];
                 state.connections = state.connections.filter(c => c.peer !== conn.peer);
@@ -288,7 +299,7 @@
         });
 
         conn.on('error', (err) => {
-            console.error("[PEER] Connection error with:", conn.peer, err);
+            console.error("[PEER] Connection-level error with:", conn.peer, err);
             conn.close();
         });
     }
