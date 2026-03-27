@@ -153,7 +153,7 @@ import { peerService } from './peer-service.js';
             }
         });
     };
-    
+
     // This function will now be called by the event listeners
     function addPlayer(id, name) {
         state.players[id] = { id: id, name: name, score: 0, totalScore: 0, hasGuessed: false, currentGuess: null };
@@ -173,7 +173,7 @@ import { peerService } from './peer-service.js';
         const roomIdInput = el.inputRoomId.value.trim().toUpperCase();
         if (!roomIdInput) return alert("Please enter a Room ID");
         localStorage.setItem('fer_geoguessr_name', name);
-        
+
         el.lobbyInitialControls.style.display = 'none';
         el.lobbyRoomDisplay.style.display = 'block';
         el.lobbyRoomId.innerText = "CONNECTING...";
@@ -208,7 +208,7 @@ import { peerService } from './peer-service.js';
         state.timeLeft = ROUND_TIME;
         broadcastState();
         state.timerInterval = setInterval(() => {
-            if (!state.isHost) return;
+            if (!peerService.getIsHost()) return;
             state.timeLeft--;
             if (state.timeLeft <= 0) { clearInterval(state.timerInterval); finishRound(); }
             else { broadcastTimer(); }
@@ -221,11 +221,6 @@ import { peerService } from './peer-service.js';
         });
         state.gameState = "results";
         broadcastState();
-    }
-
-    function addPlayer(id, name) {
-        state.players[id] = { id: id, name: name, score: 0, totalScore: 0, hasGuessed: false, currentGuess: null };
-        updateUI();
     }
 
     function startNewGame() {
@@ -624,6 +619,6 @@ import { peerService } from './peer-service.js';
         }, 150);
     }
 
-    window.hostNextRound = function () { if (state.isHost) startNextRound(); };
+    window.hostNextRound = function () { if (peerService.getIsHost()) startNextRound(); };
     init();
 })();
