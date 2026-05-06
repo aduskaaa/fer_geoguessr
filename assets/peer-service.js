@@ -118,12 +118,28 @@ class PeerService extends EventTarget {
 
     // Private helper to set up PeerJS instance
     _setupPeer(id, onReady, onError) {
-        const options = { debug: 2, secure: true };
+        const iceServers = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' }
+        ];
+        const options = { 
+            debug: 2, 
+            secure: true,
+            config: {
+                iceServers: iceServers
+            }
+        };
         try {
             this.peer = id ? new Peer(id, options) : new Peer(options);
         } catch (e) {
             console.error("[PEER_SERVICE] PeerJS Constructor Error:", e);
-            this.peer = new Peer({ debug: 2 });
+            this.peer = new Peer({ 
+                debug: 2,
+                config: { iceServers: iceServers }
+            });
         }
         
         this.peer.on('open', (myId) => {
