@@ -125,19 +125,19 @@ class PeerService extends EventTarget {
             { urls: 'stun:stun3.l.google.com:19302' },
             { urls: 'stun:stun4.l.google.com:19302' },
             {
-                urls: "turn:openrelay.metered.ca:80",
-                username: "openrelayproject",
-                credential: "openrelayproject"
+                urls: "turn:global.relay.metered.ca:80",
+                username: "370e0c14a753092e97cd645f",
+                credential: "TJ+gyUoqt2xo3oI2"
             },
             {
-                urls: "turn:openrelay.metered.ca:443",
-                username: "openrelayproject",
-                credential: "openrelayproject"
+                urls: "turn:global.relay.metered.ca:443",
+                username: "370e0c14a753092e97cd645f",
+                credential: "TJ+gyUoqt2xo3oI2"
             },
             {
-                urls: "turn:openrelay.metered.ca:443?transport=tcp",
-                username: "openrelayproject",
-                credential: "openrelayproject"
+                urls: "turn:global.relay.metered.ca:443?transport=tcp",
+                username: "370e0c14a753092e97cd645f",
+                credential: "TJ+gyUoqt2xo3oI2"
             }
         ];
         const options = { 
