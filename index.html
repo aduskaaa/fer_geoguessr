@@ -461,7 +461,10 @@
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script src="assets/user-photos.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/V1/data.js"></script>
+    <script>
+        const isLocal = !window.location.hostname || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:';
+        document.write(`<script src="${isLocal ? 'https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/V1/data.js' : 'assets/streetview/data.js'}"><\/script>`);
+    </script>
     <script src="assets/Interactive Map/Map DATA/fer-geojson.js"></script>
     <script src="assets/Interactive Map/Map DATA/fer-road-names.js"></script>
     <script src="assets/interactive-map.js"></script>

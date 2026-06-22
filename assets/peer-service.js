@@ -1,109 +1,74 @@
 // assets/peer-service.js
-// This file will encapsulate all PeerJS related logic.
+// This file encapsulates all WebSocket-based communication to the Cloudflare Worker.
+// It maintains backward compatibility with the PeerJS interface.
+
+const WEBSOCKET_SERVER_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? "ws://127.0.0.1:8787"
+    : "wss://fer-geoguessr-multiplayer.aduskaaa.workers.dev";
+
 class PeerService extends EventTarget {
     constructor() {
         super();
-        this.peer = null;
-        this.conn = null; // For client connection to host
-        this.connections = []; // For host to connected clients
+        this.ws = null;
         this.isHost = false;
         this.roomId = null;
         this.playerName = "Player";
-        this.heartbeatInterval = null;
+        this.myPlayerId = null;
+        this.connections = []; // Mocked array for compatibility
     }
 
-    // Public method to initialize PeerJS and create a room
+    // Compatibility getter to check if socket/connection is open
+    get peer() {
+        return this.ws;
+    }
+
+    // Public method to initialize and create a room
     createRoom(playerName) {
-        if (this.peer) return;
+        if (this.ws) return;
         this.playerName = playerName;
         this.isHost = true;
+        this.roomId = this._generateShortId();
 
-        const attemptCreate = (id) => {
-            this._setupPeer(id, (myId) => {
-                this.roomId = myId;
-                this.dispatchEvent(new CustomEvent('roomCreated', { detail: { roomId: myId, playerId: myId, playerName: this.playerName } }));
-            }, (err) => {
-                if (err.type === 'unavailable-id') {
-                    attemptCreate(this._generateShortId());
-                } else {
-                    console.error("Peer Error:", err);
-                    this.dispatchEvent(new CustomEvent('error', { detail: err }));
-                }
-            });
-        };
-        attemptCreate(this._generateShortId());
+        const wsUrl = `${WEBSOCKET_SERVER_URL}/ws/host/${this.roomId}?name=${encodeURIComponent(playerName)}`;
+        this._setupWebSocket(wsUrl);
     }
 
-    // Public method to join a room
+    // Public method to join an existing room
     joinRoom(playerName, roomId) {
-        if (this.peer) return;
+        if (this.ws) return;
         this.playerName = playerName;
         this.isHost = false;
-        this.roomId = roomId;
+        this.roomId = roomId.toUpperCase();
 
-        this._setupPeer(null, (myId) => {
-            console.log("[PEER_SERVICE] My client ID is:", myId);
-            console.log("[PEER_SERVICE] Attempting to connect to host:", this.roomId);
-            
-            this.conn = this.peer.connect(this.roomId);
-            this._setupConnection(this.conn);
-            
-            // Connection Timeout for Join
-            const connTimeout = setTimeout(() => {
-                if (!this.conn || !this.conn.open) {
-                    console.error("[PEER_SERVICE] Connection timeout to host:", this.roomId);
-                    this.dispatchEvent(new CustomEvent('error', { detail: { type: 'connection-timeout', message: 'Could not connect to room.' } }));
-                }
-            }, 12000);
-
-            this.conn.on('open', () => {
-                clearTimeout(connTimeout);
-                console.log("[PEER_SERVICE] Connected to host successfully.");
-                this.dispatchEvent(new CustomEvent('joinedRoom', { detail: { roomId: this.roomId, playerId: myId, playerName: this.playerName } }));
-                this.sendToHost({ type: 'join', name: this.playerName });
-            });
-
-            this.conn.on('error', (err) => {
-                clearTimeout(connTimeout);
-                console.error("[PEER_SERVICE] Connection error:", err);
-                this.dispatchEvent(new CustomEvent('error', { detail: err }));
-            });
-        }, (err) => {
-            console.error("[PEER_SERVICE] Peer setup error:", err);
-            this.dispatchEvent(new CustomEvent('error', { detail: err }));
-        });
+        const wsUrl = `${WEBSOCKET_SERVER_URL}/ws/client/${this.roomId}?name=${encodeURIComponent(playerName)}`;
+        this._setupWebSocket(wsUrl);
     }
 
-    // Public method to leave the current connection/room
+    // Public method to leave the current room
     leaveRoom() {
-        if (this.peer) {
-            this.peer.disconnect();
-            this.peer.destroy();
-            this.peer = null;
+        if (this.ws) {
+            this.ws.close();
+            this.ws = null;
         }
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval);
-            this.heartbeatInterval = null;
-        }
-        this.connections = [];
-        this.conn = null;
         this.isHost = false;
         this.roomId = null;
+        this.myPlayerId = null;
+        this.connections = [];
         this.dispatchEvent(new CustomEvent('roomLeft'));
     }
 
     // Public method to send data to the host (client-only)
     sendToHost(data) {
-        if (this.conn && this.conn.open) {
-            this.conn.send(data);
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(data));
         }
     }
 
     // Public method to broadcast data to all connected clients (host-only)
     broadcast(data) {
-        this.connections.forEach(c => {
-            if (c.open) c.send(data);
-        });
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(data));
+        }
     }
 
     // Private helper to generate a short room ID
@@ -116,131 +81,98 @@ class PeerService extends EventTarget {
         return result;
     }
 
-    // Private helper to set up PeerJS instance
-    _setupPeer(id, onReady, onError) {
-        const iceServers = [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' },
-            {
-                urls: "turn:global.relay.metered.ca:80",
-                username: "370e0c14a753092e97cd645f",
-                credential: "TJ+gyUoqt2xo3oI2"
-            },
-            {
-                urls: "turn:global.relay.metered.ca:443",
-                username: "370e0c14a753092e97cd645f",
-                credential: "TJ+gyUoqt2xo3oI2"
-            },
-            {
-                urls: "turn:global.relay.metered.ca:443?transport=tcp",
-                username: "370e0c14a753092e97cd645f",
-                credential: "TJ+gyUoqt2xo3oI2"
+    // Private helper to set up WebSocket connection
+    _setupWebSocket(url) {
+        console.log("[PEER_SERVICE] Connecting to WebSocket relay:", url);
+        try {
+            this.ws = new WebSocket(url);
+        } catch (err) {
+            console.error("[PEER_SERVICE] WebSocket initialization failed:", err);
+            this.dispatchEvent(new CustomEvent('error', { detail: err }));
+            return;
+        }
+
+        const connTimeout = setTimeout(() => {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                console.error("[PEER_SERVICE] Connection timeout to relay.");
+                this.dispatchEvent(new CustomEvent('error', { detail: { type: 'connection-timeout', message: 'Connection timeout.' } }));
+                this.leaveRoom();
             }
-        ];
-        const options = { 
-            debug: 2, 
-            secure: true,
-            config: {
-                iceServers: iceServers
+        }, 12000);
+
+        this.ws.onopen = () => {
+            clearTimeout(connTimeout);
+            console.log("[PEER_SERVICE] WebSocket connection open.");
+            
+            if (this.isHost) {
+                this.myPlayerId = "host";
+                this.dispatchEvent(new CustomEvent('roomCreated', { detail: { roomId: this.roomId, playerId: "host", playerName: this.playerName } }));
+            } else {
+                this.myPlayerId = "client_" + Math.random().toString(36).substr(2, 9);
+                this.dispatchEvent(new CustomEvent('joinedRoom', { detail: { roomId: this.roomId, playerId: this.myPlayerId, playerName: this.playerName } }));
             }
         };
-        try {
-            this.peer = id ? new Peer(id, options) : new Peer(options);
-        } catch (e) {
-            console.error("[PEER_SERVICE] PeerJS Constructor Error:", e);
-            this.peer = new Peer({ 
-                debug: 2,
-                config: { iceServers: iceServers }
-            });
-        }
-        
-        this.peer.on('open', (myId) => {
-            console.log("[PEER_SERVICE] Peer object opened. ID:", myId);
-            onReady(myId);
-        });
-        
-        this.peer.on('connection', (conn) => { 
-            if (this.isHost) {
-                console.log("[PEER_SERVICE] Host received connection request from:", conn.peer);
-                this._setupConnection(conn); 
+
+        this.ws.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+
+                if (this.isHost) {
+                    // Host system events from relay
+                    if (message.type === "clientConnected") {
+                        console.log("[PEER_SERVICE] Client connected:", message.peerId);
+                        this.connections.push({ peer: message.peerId, open: true });
+                        this.dispatchEvent(new CustomEvent('clientConnected', { detail: { peerId: message.peerId } }));
+                        return;
+                    }
+                    if (message.type === "clientDisconnected") {
+                        console.log("[PEER_SERVICE] Client disconnected:", message.peerId);
+                        this.connections = this.connections.filter(c => c.peer !== message.peerId);
+                        this.dispatchEvent(new CustomEvent('clientDisconnected', { detail: { peerId: message.peerId } }));
+                        return;
+                    }
+                    
+                    // Normal client data relayed to host
+                    if (message.sender && message.data) {
+                        this.dispatchEvent(new CustomEvent('dataReceived', { detail: { sender: message.sender, data: message.data } }));
+                    }
+                } else {
+                    // Client system events from relay
+                    if (message.type === "hostDisconnected") {
+                        console.log("[PEER_SERVICE] Host disconnected.");
+                        this.dispatchEvent(new CustomEvent('hostDisconnected'));
+                        this.leaveRoom();
+                        return;
+                    }
+                    
+                    // Host data relayed to client
+                    if (message.sender === "host" && message.data) {
+                        this.dispatchEvent(new CustomEvent('dataReceived', { detail: { sender: "host", data: message.data } }));
+                    }
+                }
+            } catch (err) {
+                console.error("[PEER_SERVICE] Failed to parse WebSocket message:", err);
             }
-        });
+        };
 
-        this.peer.on('error', (err) => {
-            console.error("[PEER_SERVICE] Global Peer Error:", err.type, err);
-            onError(err);
-        });
-
-        this.peer.on('disconnected', () => {
-            console.log("[PEER_SERVICE] Peer disconnected.");
-            this.dispatchEvent(new CustomEvent('peerDisconnected'));
-        });
-
-        this.peer.on('close', () => {
-            console.log("[PEER_SERVICE] Peer closed.");
-            this.dispatchEvent(new CustomEvent('peerClosed'));
-        });
-
-        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
-        this.heartbeatInterval = setInterval(() => {
-            if (this.isHost) {
-                this.broadcast({ type: 'heartbeat' });
-            } else if (this.conn && this.conn.open) {
-                this.sendToHost({ type: 'heartbeat' });
-            }
-        }, 3000);
-    }
-
-    // Private helper to set up a DataConnection
-    _setupConnection(conn) {
-        console.log("[PEER_SERVICE] Initializing connection handshake for:", conn.peer);
-        
-        const handshakeTimeout = setTimeout(() => {
-            if (!conn.open) {
-                console.warn("[PEER_SERVICE] Handshake timeout for:", conn.peer, ". Closing stale connection.");
-                conn.close();
-            }
-        }, 25000);
-
-        conn.on('open', () => {
-            clearTimeout(handshakeTimeout);
-            console.log("[PEER_SERVICE] Data channel successfully OPEN with:", conn.peer);
-            if (this.isHost) {
-                this.connections = this.connections.filter(c => c.peer !== conn.peer);
-                this.connections.push(conn);
-                this.dispatchEvent(new CustomEvent('clientConnected', { detail: { peerId: conn.peer } }));
-            }
-            // The actual gameState or join message is sent after this event is dispatched and handled by main logic
-        });
-
-        conn.on('data', (data) => {
-            if (data.type !== 'heartbeat') console.log("[PEER_SERVICE] Data from", conn.peer, ":", data.type);
-            this.dispatchEvent(new CustomEvent('dataReceived', { detail: { sender: conn.peer, data: data } }));
-        });
-
-        conn.on('close', () => {
-            console.log("[PEER_SERVICE] Connection CLOSED with:", conn.peer);
-            if (this.isHost) {
-                this.connections = this.connections.filter(c => c.peer !== conn.peer);
-                this.dispatchEvent(new CustomEvent('clientDisconnected', { detail: { peerId: conn.peer } }));
-            } else {
+        this.ws.onclose = (event) => {
+            clearTimeout(connTimeout);
+            console.log("[PEER_SERVICE] WebSocket closed:", event);
+            if (!this.isHost) {
                 this.dispatchEvent(new CustomEvent('hostDisconnected'));
             }
-        });
+            this.leaveRoom();
+        };
 
-        conn.on('error', (err) => {
-            console.error("[PEER_SERVICE] Connection-level error with:", conn.peer, err);
-            this.dispatchEvent(new CustomEvent('connectionError', { detail: { peerId: conn.peer, error: err } }));
-            conn.close();
-        });
+        this.ws.onerror = (err) => {
+            clearTimeout(connTimeout);
+            console.error("[PEER_SERVICE] WebSocket error:", err);
+            this.dispatchEvent(new CustomEvent('error', { detail: err }));
+        };
     }
 
-    // Getters for current state
     getPeerId() {
-        return this.peer ? this.peer.id : null;
+        return this.myPlayerId;
     }
 
     getIsHost() {
@@ -256,5 +188,4 @@ class PeerService extends EventTarget {
     }
 }
 
-// Export a singleton instance
 export const peerService = new PeerService();

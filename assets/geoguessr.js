@@ -2,6 +2,9 @@
 import { peerService } from './peer-service.js';
 
 (function () {
+    const isLocal = !window.location.hostname || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:';
+    const STREETVIEW_BASE_URL = isLocal ? "https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/V1/" : "assets/streetview/";
+
     const MAX_ROUNDS = 5;
     const ROUND_TIME = 60; // 60 seconds
     const SCORE_K = 288; // Score coefficient for km distance
@@ -231,7 +234,7 @@ import { peerService } from './peer-service.js';
                 name: "Streetview #" + sv.id,
                 lon: sv.lon,
                 lat: sv.lat,
-                photo: "https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/V1/" + sv.file
+                photo: STREETVIEW_BASE_URL + sv.file
             }))
             : [...window.USER_PHOTOS];
         const photos = [...sourceData];
@@ -610,7 +613,7 @@ import { peerService } from './peer-service.js';
         el.photoToGuess.style.opacity = '0';
 
         setTimeout(() => {
-            el.photoToGuess.src = `https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/V1/${svData.properties.file}`;
+            el.photoToGuess.src = `${STREETVIEW_BASE_URL}${svData.properties.file}`;
             const newLon = svData.geometry.coordinates[0];
             const newLat = svData.geometry.coordinates[1];
 

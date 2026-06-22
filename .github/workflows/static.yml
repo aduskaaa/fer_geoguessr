@@ -31,6 +31,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Checkout streetview assets
+        uses: actions/checkout@v4
+        with:
+          repository: aduskaaa/fer-streetview
+          path: temp-assets
+          fetch-depth: 1
+          sparse-checkout: |
+            V1
+          sparse-checkout-cone-mode: false
+      - name: Copy assets to build directory
+        run: |
+          mkdir -p assets/streetview
+          cp -r temp-assets/V1/* assets/streetview/
+          rm -rf temp-assets
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
