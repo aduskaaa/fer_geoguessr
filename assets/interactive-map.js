@@ -30,6 +30,7 @@
         viewX: 0,
         viewY: 0,
         zoom: 1.0,
+        currentVersion: 'V1',
         layers: {
             mapAreas: [],
             prefabs: [],
@@ -73,6 +74,10 @@
 
     // --- API ---
     window.MapEngine = {
+        setMapVersion: (version) => {
+            setMapVersionInternal(version);
+        },
+        getMapVersion: () => state.currentVersion || 'V1',
         setGuessingMode: (enabled) => {
             state.guessing.enabled = enabled;
             state.toggles.photos = !enabled;
@@ -243,11 +248,44 @@
         }
     };
 
+    function setMapVersionInternal(version) {
+        const v = (version || 'V1').toUpperCase();
+        state.currentVersion = v;
+
+        // Clear existing dynamic layers
+        state.layers.mapAreas = [];
+        state.layers.prefabs = [];
+        state.layers.roads = [];
+        state.layers.ferries = [];
+        state.layers.cities = [];
+        state.layers.pois = [];
+        state.layers.photos = [];
+        state.layers.roadNames = [];
+        state.layers.streetview = [];
+
+        // Pick data corresponding to requested version
+        let geoData = (v === 'V2' && window.FER_DATA_V2) ? window.FER_DATA_V2 : (window.FER_DATA_V1 || window.FER_DATA);
+        let svData = (v === 'V2' && window.streetview_data_v2) ? window.streetview_data_v2 : (window.streetview_data_v1 || window.streetview_data);
+
+        if (geoData && geoData.features) {
+            processData(geoData.features);
+        }
+        processMarkers();
+        processRoadNames();
+        if (svData) {
+            processStreetView(svData);
+        }
+
+        initializeView();
+        requestAnimationFrame(render);
+    }
+
     async function start() {
         if (window.FER_DATA_LOADING) await window.FER_DATA_LOADING;
 
-        if (!window.FER_DATA || !window.FER_DATA.features) {
-            console.error('Error: window.FER_DATA (from fer-geojson.js) failed to load or is empty. Map data is critical for proper functionality.');
+        const dataReady = window.FER_DATA_V1 || window.FER_DATA || window.FER_DATA_V2;
+        if (!dataReady || !dataReady.features) {
+            console.warn('Map data not ready yet, retrying...');
             setTimeout(start, 200); // Re-try loading
             return;
         }
@@ -275,11 +313,8 @@
             state.background.isLoaded = false;
         };
 
-        processData(window.FER_DATA.features);
-        processMarkers();
-        processRoadNames();
-        processStreetView();
-        initializeView();
+        const initialVersion = window.MAP_VERSION || 'V1';
+        setMapVersionInternal(initialVersion);
         setupToggles();
     }
 
@@ -303,9 +338,10 @@
         }
     }
 
-    function processStreetView() {
-        if (window.streetview_data) {
-            window.streetview_data.forEach(sv => {
+    function processStreetView(data) {
+        const source = data || (state.currentVersion === 'V2' && window.streetview_data_v2 ? window.streetview_data_v2 : (window.streetview_data_v1 || window.streetview_data));
+        if (source) {
+            source.forEach(sv => {
                 const feature = {
                     type: "Feature",
                     properties: {
@@ -457,8 +493,10 @@
             state.viewY = canvas.height / 2;
         }
 
-        loader.style.opacity = '0';
-        setTimeout(() => loader.style.display = 'none', 800);
+        if (loader) {
+            loader.style.opacity = '0';
+            setTimeout(() => loader.style.display = 'none', 800);
+        }
 
         requestAnimationFrame(render);
     }

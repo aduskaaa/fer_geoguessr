@@ -1,13 +1,22 @@
-
-import { peerService } from './peer-service.js';
-
 (function () {
-    const isLocal = !window.location.hostname || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:';
-    const STREETVIEW_BASE_URL = isLocal ? "https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/V1/" : "assets/streetview/";
+    const peerService = window.peerService;
 
     const MAX_ROUNDS = 5;
     const ROUND_TIME = 60; // 60 seconds
     const SCORE_K = 288; // Score coefficient for km distance
+
+    function getStreetViewBaseUrl(version) {
+        const v = (version || state.mapVersion || 'V1').toUpperCase();
+        return `https://raw.githubusercontent.com/aduskaaa/fer-streetview/main/${v}/`;
+    }
+
+    function getCurrentStreetViewData(version) {
+        const v = (version || state.mapVersion || 'V1').toUpperCase();
+        if (v === 'V2') {
+            return window.streetview_data_v2 || window.streetview_data;
+        }
+        return window.streetview_data_v1 || window.streetview_data;
+    }
 
     const state = {
         players: {},
@@ -19,7 +28,8 @@ import { peerService } from './peer-service.js';
         timerInterval: null,
         // BUG FIX: Track local guess status strictly by round
         localHasGuessed: false,
-        localLastGuessedRound: -1
+        localLastGuessedRound: -1,
+        mapVersion: "V1"
     };
 
     // UI Elements
@@ -78,6 +88,19 @@ import { peerService } from './peer-service.js';
         const savedName = localStorage.getItem('fer_geoguessr_name');
         if (savedName) el.inputPlayerName.value = savedName;
         window.MapEngine.setGuessingMode(true);
+        if (window.MapEngine.setMapVersion) {
+            window.MapEngine.setMapVersion(state.mapVersion);
+        }
+        updateMapVersionUI(state.mapVersion);
+
+        el.photoToGuess.onerror = function () {
+            if (this.src && this.src.includes('cdn.jsdelivr.net')) {
+                this.src = this.src.replace('https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/', 'https://raw.githubusercontent.com/aduskaaa/fer-streetview/main/');
+            } else {
+                const loader = document.getElementById('photo-loader');
+                if (loader) loader.style.display = 'none';
+            }
+        };
 
         // --- PeerService Event Listeners ---
         peerService.addEventListener('roomCreated', (e) => {
@@ -189,16 +212,63 @@ import { peerService } from './peer-service.js';
         if (peerService.getIsHost()) startNewGame();
     };
 
+    window.setMapVersion = function (version) {
+        const v = (version || 'V1').toUpperCase();
+        state.mapVersion = v;
+        if (window.MapEngine && window.MapEngine.setMapVersion) {
+            window.MapEngine.setMapVersion(v);
+        }
+        updateMapVersionUI(v);
+        if (peerService.getIsHost()) {
+            broadcastState();
+        }
+    };
 
-
-
+    function updateMapVersionUI(v) {
+        const version = (v || state.mapVersion || 'V1').toUpperCase();
+        const btnV1 = document.getElementById('btn-map-v1');
+        const btnV2 = document.getElementById('btn-map-v2');
+        if (btnV1 && btnV2) {
+            if (version === 'V2') {
+                btnV1.classList.remove('active');
+                btnV2.classList.add('active');
+            } else {
+                btnV2.classList.remove('active');
+                btnV1.classList.add('active');
+            }
+        }
+        const btnWaitV1 = document.getElementById('btn-waiting-v1');
+        const btnWaitV2 = document.getElementById('btn-waiting-v2');
+        if (btnWaitV1 && btnWaitV2) {
+            if (version === 'V2') {
+                btnWaitV1.classList.remove('active');
+                btnWaitV2.classList.add('active');
+            } else {
+                btnWaitV2.classList.remove('active');
+                btnWaitV1.classList.add('active');
+            }
+        }
+        const clientVersionDisplay = document.getElementById('client-version-display');
+        if (clientVersionDisplay) {
+            clientVersionDisplay.innerText = version === 'V2' ? 'V2 (Expanded Map)' : 'V1 (Classic Map)';
+        }
+        const hudBadge = document.getElementById('hud-map-version');
+        if (hudBadge) {
+            hudBadge.innerText = `MAP: ${version}`;
+        }
+        const miniTag = document.getElementById('mini-map-version-tag');
+        if (miniTag) {
+            miniTag.innerText = version;
+        }
+    }
 
     function broadcastState() {
         peerService.broadcast({
             type: 'gameState',
             state: {
                 players: state.players, currentRound: state.currentRound,
-                currentPhoto: state.currentPhoto, gameState: state.gameState, timeLeft: state.timeLeft
+                currentPhoto: state.currentPhoto, gameState: state.gameState, timeLeft: state.timeLeft,
+                mapVersion: state.mapVersion
             }
         });
         updateUI();
@@ -229,12 +299,14 @@ import { peerService } from './peer-service.js';
     function startNewGame() {
         state.currentRound = 0;
         Object.values(state.players).forEach(p => { p.score = 0; p.totalScore = 0; p.hasGuessed = false; p.currentGuess = null; });
-        const sourceData = window.streetview_data
-            ? window.streetview_data.map(sv => ({
+        const svList = getCurrentStreetViewData(state.mapVersion);
+        const baseUrl = getStreetViewBaseUrl(state.mapVersion);
+        const sourceData = svList
+            ? svList.map(sv => ({
                 name: "Streetview #" + sv.id,
                 lon: sv.lon,
                 lat: sv.lat,
-                photo: STREETVIEW_BASE_URL + sv.file
+                photo: baseUrl + sv.file
             }))
             : [...window.USER_PHOTOS];
         const photos = [...sourceData];
@@ -261,6 +333,13 @@ import { peerService } from './peer-service.js';
     }
 
     function updateFromState(newState) {
+        if (newState.mapVersion && newState.mapVersion !== state.mapVersion) {
+            state.mapVersion = newState.mapVersion;
+            if (window.MapEngine && window.MapEngine.setMapVersion) {
+                window.MapEngine.setMapVersion(state.mapVersion);
+            }
+            updateMapVersionUI(state.mapVersion);
+        }
         state.players = newState.players;
         state.currentRound = newState.currentRound;
         state.currentPhoto = newState.currentPhoto;
@@ -270,7 +349,21 @@ import { peerService } from './peer-service.js';
     }
 
     function updateUI() {
+        updateMapVersionUI(state.mapVersion);
         if (state.gameState === "lobby") {
+            const isHost = peerService.getIsHost();
+            const hostVersionToggle = document.getElementById('host-version-toggle');
+            const clientVersionDisplay = document.getElementById('client-version-display');
+            if (hostVersionToggle && clientVersionDisplay) {
+                if (isHost) {
+                    hostVersionToggle.style.display = 'flex';
+                    clientVersionDisplay.style.display = 'none';
+                } else {
+                    hostVersionToggle.style.display = 'none';
+                    clientVersionDisplay.style.display = 'block';
+                }
+            }
+
             el.playersListContainer.innerHTML = '';
             const playerIds = Object.keys(state.players);
             if (playerIds.length === 0 && !peerService.getIsHost()) {
@@ -485,8 +578,9 @@ import { peerService } from './peer-service.js';
     }
 
     function renderStreetViewOverlay(svId, lon, lat, currentRotation = null) {
-        if (!window.streetview_data) return;
-        const svNode = window.streetview_data.find(s => s.id === svId);
+        const svList = getCurrentStreetViewData(state.mapVersion);
+        if (!svList) return;
+        const svNode = svList.find(s => s.id === svId);
         if (!svNode) return;
 
         const overlay = getOrCreateSVOverlay();
@@ -612,8 +706,9 @@ import { peerService } from './peer-service.js';
         document.getElementById('photo-loader').style.display = 'flex';
         el.photoToGuess.style.opacity = '0';
 
+        const baseUrl = getStreetViewBaseUrl(state.mapVersion);
         setTimeout(() => {
-            el.photoToGuess.src = `${STREETVIEW_BASE_URL}${svData.properties.file}`;
+            el.photoToGuess.src = `${baseUrl}${svData.properties.file}`;
             const newLon = svData.geometry.coordinates[0];
             const newLat = svData.geometry.coordinates[1];
 

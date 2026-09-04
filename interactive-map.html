@@ -7,10 +7,12 @@
     <title>Interactive Map – Far East Russia</title>
     <meta name="description" content="High-precision interactive map viewer for the Far East Russia map mod.">
     <link rel="icon" href="favicon.ico">
-    <link rel="stylesheet" href="assets/css/global.css">
     <style>
         :root {
             --header-h: 62px;
+            --accent: #2ecc71;
+            --text-bright: #ffffff;
+            --muted: #888888;
         }
 
         body,
@@ -91,6 +93,33 @@
                 transform: rotate(360deg);
             }
         }
+
+        .btn-version {
+            background: rgba(20, 20, 20, 0.75);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #aaa;
+            padding: 8px 16px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-version:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+        }
+
+        .btn-version.active {
+            background: rgba(46, 204, 113, 0.2);
+            border-color: #2ecc71;
+            color: #2ecc71;
+            box-shadow: 0 0 15px rgba(46, 204, 113, 0.25);
+        }
     </style>
 </head>
 
@@ -106,7 +135,12 @@
 
         <div class="hud-top-left">
             <h1>INTERACTIVE MAP</h1>
-            <p>Far East Russia • Map Version 1</p>
+            <p id="map-version-title">Far East Russia • Map Version 1 (Classic)</p>
+        </div>
+
+        <div style="position: absolute; top: 20px; right: 20px; z-index: 100; display: flex; gap: 8px;">
+            <button id="btn-switch-v1" class="btn-version active" onclick="switchMapVersion('V1')">V1 (Classic)</button>
+            <button id="btn-switch-v2" class="btn-version" onclick="switchMapVersion('V2')">V2 (Expanded)</button>
         </div>
 
         <canvas id="map-canvas"></canvas>
@@ -161,15 +195,33 @@
         </div>
     </main>
 
-    <script src="assets/site-data.js"></script>
-    <script src="assets/site-renderer.js"></script>
-    <script src="assets/custom-companies.js"></script>
+    <script src="assets/streetview/data.js"></script>
+    <script src="assets/streetview/data-v2.js"></script>
     <script src="assets/user-photos.js"></script>
     <script src="assets/Interactive Map/Map DATA/fer-geojson.js"></script>
+    <script src="assets/Interactive Map/Map DATA/fer-geojson-v2.js"></script>
     <script src="assets/Interactive Map/Map DATA/fer-road-names.js"></script>
     <script src="assets/interactive-map.js"></script>
 
     <script>
+        function switchMapVersion(version) {
+            if (window.MapEngine && window.MapEngine.setMapVersion) {
+                window.MapEngine.setMapVersion(version);
+            }
+            const btnV1 = document.getElementById('btn-switch-v1');
+            const btnV2 = document.getElementById('btn-switch-v2');
+            const title = document.getElementById('map-version-title');
+            if (version === 'V2') {
+                if (btnV1) btnV1.classList.remove('active');
+                if (btnV2) btnV2.classList.add('active');
+                if (title) title.innerText = 'Far East Russia • Map Version 2 (Expanded)';
+            } else {
+                if (btnV2) btnV2.classList.remove('active');
+                if (btnV1) btnV1.classList.add('active');
+                if (title) title.innerText = 'Far East Russia • Map Version 1 (Classic)';
+            }
+        }
+
         function closeModal() {
             document.getElementById('photo-modal').style.display = 'none';
         }

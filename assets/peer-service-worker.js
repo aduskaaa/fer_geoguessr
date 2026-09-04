@@ -1,11 +1,14 @@
-// assets/peer-service.js
-// Multiplayer networking service backed by Cloudflare Worker WebSocket relay
-// Production relay: wss://fer-geoguessr-multiplayer.fareastrussia.workers.dev
-(function () {
-    const DEFAULT_WORKER_URL = "wss://fer-geoguessr-multiplayer.fareastrussia.workers.dev";
-    const WEBSOCKET_SERVER_URL = window.FER_WS_URL || DEFAULT_WORKER_URL;
+// assets/peer-service-worker.js
+// WebSocket-based communication connecting to the Cloudflare Worker (worker/src/index.js).
+// Supports local development with `npx wrangler dev` (ws://127.0.0.1:8787)
+// and production deployment (wss://fer-geoguessr-multiplayer.fareastrussia.workers.dev).
 
-    class PeerService extends EventTarget {
+(function () {
+    const WEBSOCKET_SERVER_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+        ? "ws://127.0.0.1:8787"
+        : "wss://fer-geoguessr-multiplayer.fareastrussia.workers.dev";
+
+    class PeerServiceWorker extends EventTarget {
         constructor() {
             super();
             this.ws = null;
@@ -14,15 +17,12 @@
             this.playerName = "Player";
             this.myPlayerId = null;
             this.connections = [];
-            this.heartbeatInterval = null;
-            this._leaving = false;
         }
 
         get peer() {
             return this.ws;
         }
 
-        // Public method to initialize room on Cloudflare Worker as host
         createRoom(playerName) {
             if (this.ws) return;
             this.playerName = playerName;
@@ -33,7 +33,6 @@
             this._setupWebSocket(wsUrl);
         }
 
-        // Public method to join an existing room as client
         joinRoom(playerName, roomId) {
             if (this.ws) return;
             this.playerName = playerName;
@@ -44,25 +43,17 @@
             this._setupWebSocket(wsUrl);
         }
 
-        // Host broadcasts payload to all connected clients
         broadcast(data) {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
             this.ws.send(JSON.stringify(data));
         }
 
-        // Client sends payload to the host
         sendToHost(data) {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
             this.ws.send(JSON.stringify(data));
         }
 
-        // Clean up connection and leave room
         leaveRoom() {
-            this._leaving = true;
-            if (this.heartbeatInterval) {
-                clearInterval(this.heartbeatInterval);
-                this.heartbeatInterval = null;
-            }
             if (this.ws) {
                 try { this.ws.close(); } catch (e) {}
                 this.ws = null;
@@ -70,7 +61,6 @@
             this.isHost = false;
             this.roomId = null;
             this.myPlayerId = null;
-            this._leaving = false;
             this.dispatchEvent(new CustomEvent('roomLeft'));
         }
 
@@ -78,51 +68,33 @@
             try {
                 this.ws = new WebSocket(url);
             } catch (err) {
-                console.error("[PEER_SERVICE] Failed to create WebSocket:", err);
+                console.error("[WORKER_SERVICE] Failed to create WebSocket:", err);
                 this.dispatchEvent(new CustomEvent('error', { detail: err }));
                 return;
             }
 
             const connTimeout = setTimeout(() => {
                 if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
-                    console.error("[PEER_SERVICE] Connection timeout to Cloudflare Worker relay.");
-                    this.dispatchEvent(new CustomEvent('error', { 
-                        detail: { message: "Connection timeout to Cloudflare Worker relay. Please check your network connection." } 
-                    }));
+                    console.error("[WORKER_SERVICE] Connection timeout to Cloudflare Worker");
+                    this.dispatchEvent(new CustomEvent('error', { detail: { message: "Connection timeout to Cloudflare Worker. Ensure worker is running or deployed." } }));
                     this.leaveRoom();
                 }
-            }, 10000);
+            }, 8000);
 
             this.ws.onopen = () => {
                 clearTimeout(connTimeout);
-                console.log("[PEER_SERVICE] Connected to Cloudflare Worker relay:", WEBSOCKET_SERVER_URL);
+                console.log("[WORKER_SERVICE] Connected to Cloudflare Worker WebSocket.");
                 if (this.isHost) {
                     this.myPlayerId = this.roomId;
                     this.dispatchEvent(new CustomEvent('roomCreated', {
                         detail: { roomId: this.roomId, playerId: this.myPlayerId, playerName: this.playerName }
                     }));
                 }
-
-                // Periodic ping to keep the WebSocket connection healthy
-                if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
-                this.heartbeatInterval = setInterval(() => {
-                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                        try { this.ws.send(JSON.stringify({ type: 'ping' })); } catch (e) {}
-                    }
-                }, 25000);
             };
 
             this.ws.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data);
-
-                    if (message.type === "error") {
-                        clearTimeout(connTimeout);
-                        this.dispatchEvent(new CustomEvent('error', { detail: { message: message.message } }));
-                        this.leaveRoom();
-                        return;
-                    }
-
                     if (message.type === "joined") {
                         this.myPlayerId = message.playerId;
                         this.dispatchEvent(new CustomEvent('joinedRoom', {
@@ -131,23 +103,19 @@
                         this.sendToHost({ type: 'join', name: this.playerName });
                         return;
                     }
-
                     if (message.type === "clientConnected") {
                         this.dispatchEvent(new CustomEvent('clientConnected', { detail: { peerId: message.peerId, name: message.name } }));
                         return;
                     }
-
                     if (message.type === "clientDisconnected") {
                         this.dispatchEvent(new CustomEvent('clientDisconnected', { detail: { peerId: message.peerId } }));
                         return;
                     }
-
                     if (message.type === "hostDisconnected") {
                         this.dispatchEvent(new CustomEvent('hostDisconnected'));
                         this.leaveRoom();
                         return;
                     }
-
                     if (this.isHost) {
                         if (message.sender && message.data) {
                             this.dispatchEvent(new CustomEvent('dataReceived', { detail: { sender: message.sender, data: message.data } }));
@@ -158,17 +126,13 @@
                         }
                     }
                 } catch (err) {
-                    console.error("[PEER_SERVICE] Failed to parse message:", err);
+                    console.error("[WORKER_SERVICE] Failed to parse message:", err);
                 }
             };
 
-            this.ws.onclose = () => {
+            this.ws.onclose = (event) => {
                 clearTimeout(connTimeout);
-                if (this.heartbeatInterval) {
-                    clearInterval(this.heartbeatInterval);
-                    this.heartbeatInterval = null;
-                }
-                if (!this.isHost && this.roomId && !this._leaving) {
+                if (!this.isHost) {
                     this.dispatchEvent(new CustomEvent('hostDisconnected'));
                 }
                 this.leaveRoom();
@@ -176,7 +140,7 @@
 
             this.ws.onerror = (err) => {
                 clearTimeout(connTimeout);
-                console.error("[PEER_SERVICE] WebSocket error:", err);
+                console.error("[WORKER_SERVICE] WebSocket error:", err);
                 this.dispatchEvent(new CustomEvent('error', { detail: err }));
             };
         }
@@ -196,6 +160,5 @@
         getRoomId() { return this.roomId; }
     }
 
-    window.PeerService = PeerService;
-    window.peerService = new PeerService();
+    window.PeerServiceWorker = PeerServiceWorker;
 })();

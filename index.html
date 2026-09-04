@@ -195,6 +195,28 @@
             box-shadow: 0 4px 15px rgba(231, 76, 60, 0.3);
         }
 
+        .btn-version {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--glass-border);
+            color: #888;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            border-radius: 10px;
+        }
+
+        .btn-version:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+        }
+
+        .btn-version.active {
+            background: rgba(46, 204, 113, 0.15);
+            border-color: var(--accent);
+            color: var(--accent);
+            box-shadow: 0 0 15px rgba(46, 204, 113, 0.25);
+            font-weight: 900;
+        }
+
         /* ----- TIMER ----- */
         #timer-info {
             position: absolute;
@@ -360,6 +382,10 @@
             <p id="player-name-display"
                 style="color: var(--accent); margin: 0; font-weight: 900; font-size: 12px; letter-spacing: 2px;">PLAYER:
                 -</p>
+            <div id="hud-map-version"
+                style="margin-top: 5px; display: inline-block; background: rgba(0,0,0,0.6); backdrop-filter: blur(10px); padding: 4px 10px; border-radius: 6px; border: 1px solid var(--glass-border); font-size: 10px; font-weight: 800; letter-spacing: 1px; color: var(--accent);">
+                MAP: V1
+            </div>
         </div>
 
         <div class="hud-top-right">
@@ -382,7 +408,7 @@
             <canvas id="map-canvas"></canvas>
             <div
                 style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 5px 12px; border-radius: 8px; color: #fff; font-size: 10px; font-weight: 800; border: 1px solid var(--glass-border); pointer-events: none;">
-                INTERACTIVE MAP</div>
+                INTERACTIVE MAP <span id="mini-map-version-tag" style="color: var(--accent); margin-left: 4px;">V1</span></div>
             <div
                 style="position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 6px; display: flex; gap: 10px; z-index: 1001;">
                 <label style="font-size: 9px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
@@ -419,6 +445,19 @@
                         <label>YOUR NAME</label>
                         <input type="text" id="input-player-name" placeholder="Enter name...">
                     </div>
+                    <div class="input-group" style="margin-top: 15px;">
+                        <label>MAP VERSION</label>
+                        <div style="display: flex; gap: 10px; margin-top: 8px;">
+                            <button type="button" id="btn-map-v1" class="btn btn-version active" onclick="setMapVersion('V1')" style="flex: 1; padding: 12px 6px; font-size: 11px;">
+                                <div>V1 (CLASSIC)</div>
+                                <div style="font-size: 9px; opacity: 0.7; font-weight: normal; margin-top: 3px;">11,449 locations</div>
+                            </button>
+                            <button type="button" id="btn-map-v2" class="btn btn-version" onclick="setMapVersion('V2')" style="flex: 1; padding: 12px 6px; font-size: 11px;">
+                                <div>V2 (EXPANDED)</div>
+                                <div style="font-size: 9px; opacity: 0.7; font-weight: normal; margin-top: 3px;">13,910 locations</div>
+                            </button>
+                        </div>
+                    </div>
                     <div style="display: flex; gap: 15px; margin-top: 25px;">
                         <button class="btn" style="flex: 1;" onclick="createRoom()">Create</button>
                         <button class="btn btn-secondary" style="flex: 1;" onclick="showJoinInput()">Join</button>
@@ -438,6 +477,14 @@
                         <label style="font-size: 11px; font-weight: 900; color: #555;">PLAYERS IN LOBBY</label>
                         <div id="players-list-container"
                             style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px;"></div>
+                    </div>
+                    <div id="lobby-waiting-version-container" style="text-align: left; margin-bottom: 20px;">
+                        <label style="font-size: 11px; font-weight: 900; color: #555;">MAP VERSION</label>
+                        <div id="host-version-toggle" style="display: flex; gap: 10px; margin-top: 8px;">
+                            <button type="button" id="btn-waiting-v1" class="btn btn-version active" onclick="setMapVersion('V1')" style="flex: 1; padding: 10px 5px; font-size: 10px;">V1 (Classic)</button>
+                            <button type="button" id="btn-waiting-v2" class="btn btn-version" onclick="setMapVersion('V2')" style="flex: 1; padding: 10px 5px; font-size: 10px;">V2 (Expanded)</button>
+                        </div>
+                        <div id="client-version-display" style="display: none; margin-top: 8px; font-size: 12px; font-weight: 800; color: var(--accent); background: rgba(255,255,255,0.03); padding: 10px 15px; border-radius: 8px; border: 1px solid var(--glass-border);">V1 (Classic Map)</div>
                     </div>
                     <button id="btn-start-game" class="btn" style="width: 100%;" onclick="hostStartGame()">Start
                         Game</button>
@@ -461,14 +508,14 @@
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script src="assets/user-photos.js"></script>
-    <script>
-        const isLocal = !window.location.hostname || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:';
-        document.write(`<script src="${isLocal ? 'https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/V1/data.js' : 'assets/streetview/data.js'}"><\/script>`);
-    </script>
+    <script src="assets/streetview/data.js"></script>
+    <script src="assets/streetview/data-v2.js"></script>
     <script src="assets/Interactive Map/Map DATA/fer-geojson.js"></script>
+    <script src="assets/Interactive Map/Map DATA/fer-geojson-v2.js"></script>
     <script src="assets/Interactive Map/Map DATA/fer-road-names.js"></script>
     <script src="assets/interactive-map.js"></script>
-    <script type="module" src="assets/geoguessr.js"></script>
+    <script src="assets/peer-service.js"></script>
+    <script src="assets/geoguessr.js"></script>
 
     <script>
         function showJoinInput() { document.getElementById('join-input-group').style.display = 'block'; }
