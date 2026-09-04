@@ -134,13 +134,13 @@
         </div>
 
         <div class="hud-top-left">
-            <h1>INTERACTIVE MAP</h1>
-            <p id="map-version-title">Far East Russia • Map Version 1 (Classic)</p>
+            <h1>FAR EAST RUSSIA</h1>
+            <p id="map-version-title">Map Version 1</p>
         </div>
 
         <div style="position: absolute; top: 20px; right: 20px; z-index: 100; display: flex; gap: 8px;">
-            <button id="btn-switch-v1" class="btn-version active" onclick="switchMapVersion('V1')">V1 (Classic)</button>
-            <button id="btn-switch-v2" class="btn-version" onclick="switchMapVersion('V2')">V2 (Expanded)</button>
+            <button id="btn-switch-v1" class="btn-version active" onclick="switchMapVersion('V1')">V1</button>
+            <button id="btn-switch-v2" class="btn-version" onclick="switchMapVersion('V2')">V2</button>
         </div>
 
         <canvas id="map-canvas"></canvas>
@@ -158,11 +158,7 @@
                 <input type="checkbox" id="toggle-photos" checked style="accent-color: var(--accent);">
                 <span style="font-size: 11px; font-weight: 800; color: #eee; text-transform: uppercase; letter-spacing: 1px;">User Photos</span>
             </label>
-            <div style="width: 1px; height: 15px; background: rgba(255,255,255,0.1);"></div>
-            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-                <input type="checkbox" id="toggle-road-names" checked style="accent-color: var(--accent);">
-                <span style="font-size: 11px; font-weight: 800; color: #eee; text-transform: uppercase; letter-spacing: 1px;">Road Names</span>
-            </label>
+
             <div style="width: 1px; height: 15px; background: rgba(255,255,255,0.1);"></div>
             <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
                 <input type="checkbox" id="toggle-background" checked style="accent-color: var(--accent);">
@@ -200,7 +196,6 @@
     <script src="assets/user-photos.js"></script>
     <script src="assets/Interactive Map/Map DATA/fer-geojson.js"></script>
     <script src="assets/Interactive Map/Map DATA/fer-geojson-v2.js"></script>
-    <script src="assets/Interactive Map/Map DATA/fer-road-names.js"></script>
     <script src="assets/interactive-map.js"></script>
 
     <script>
@@ -214,11 +209,11 @@
             if (version === 'V2') {
                 if (btnV1) btnV1.classList.remove('active');
                 if (btnV2) btnV2.classList.add('active');
-                if (title) title.innerText = 'Far East Russia • Map Version 2 (Expanded)';
+                if (title) title.innerText = 'Far East Russia • Map Version 2';
             } else {
                 if (btnV2) btnV2.classList.remove('active');
                 if (btnV1) btnV1.classList.add('active');
-                if (title) title.innerText = 'Far East Russia • Map Version 1 (Classic)';
+                if (title) title.innerText = 'Far East Russia • Map Version 1';
             }
         }
 

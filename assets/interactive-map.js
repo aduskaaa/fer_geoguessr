@@ -39,12 +39,10 @@
             cities: [],
             pois: [],
             photos: [],
-            roadNames: [],
             streetview: []
         },
         toggles: {
             photos: true,
-            roadNames: true,
             background: true
         },
         calibration: {
@@ -54,15 +52,17 @@
             sy: -110.0,
             rot: 0
         },
-        background: { // New background object
+        background: {
             image: null,
             isLoaded: false,
-            centerLon: 145.5000164922681, // User provided center longitude
-            centerLat: 64.40890004210075,  // User provided center latitude
-            widthInMapUnits: 40,   // Arbitrary initial width in abstract map units, needs calibration
-            heightInMapUnits: 30,  // Arbitrary initial height in abstract map units, needs calibration
+            centerLon: 105.0,
+            centerLat: 61.0,
+            widthInMapUnits: 170.0,
+            heightInMapUnits: 42.0,
             isVisible: true
         },
+        minZoom: 0.05,
+        maxZoom: 2000,
         guessing: {
             enabled: false,
             guessMarker: null, // Local player's guess
@@ -260,7 +260,6 @@
         state.layers.cities = [];
         state.layers.pois = [];
         state.layers.photos = [];
-        state.layers.roadNames = [];
         state.layers.streetview = [];
 
         // Pick data corresponding to requested version
@@ -271,7 +270,6 @@
             processData(geoData.features);
         }
         processMarkers();
-        processRoadNames();
         if (svData) {
             processStreetView(svData);
         }
@@ -290,27 +288,36 @@
             return;
         }
 
-        // Load background image
+        // Load background image from main repo (WebP, fallback PNG)
         const bgImg = new Image();
-        bgImg.src = 'imgs/mapbg.png';
+        bgImg.src = 'imgs/mapbg_russia.webp';
         bgImg.onload = () => {
             state.background.image = bgImg;
             state.background.isLoaded = true;
-
-            // Calculate dimensions to match original image size (1:1 pixel scale at zoom 1.0)
-            // This prevents stretching/squishing by respecting the map's projection calibration
-            if (state.calibration.sx !== 0 && state.calibration.sy !== 0) {
-                const scaleFactor = 4.3; // User requested 250% size
-                state.background.widthInMapUnits = (bgImg.width / state.calibration.sx) * scaleFactor;
-                state.background.heightInMapUnits = (bgImg.height / Math.abs(state.calibration.sy)) * scaleFactor;
-            }
-
-            console.log(`Background Debug: Image loaded. Dimensions set to ${state.background.widthInMapUnits.toFixed(4)} x ${state.background.heightInMapUnits.toFixed(4)} map units.`);
-            requestAnimationFrame(render); // Request a re-render once image loads
+            state.background.centerLon = 105.0;
+            state.background.centerLat = 61.0;
+            state.background.widthInMapUnits = 170.0;
+            state.background.heightInMapUnits = 42.0;
+            clampView();
+            requestAnimationFrame(render);
         };
         bgImg.onerror = () => {
-            console.error('Background Debug: Failed to load background image: imgs/mapbg.png');
-            state.background.isLoaded = false;
+            const fallbackImg = new Image();
+            fallbackImg.src = 'imgs/mapbg.png';
+            fallbackImg.onload = () => {
+                state.background.image = fallbackImg;
+                state.background.isLoaded = true;
+                state.background.centerLon = 105.0;
+                state.background.centerLat = 61.0;
+                state.background.widthInMapUnits = 170.0;
+                state.background.heightInMapUnits = 42.0;
+                clampView();
+                requestAnimationFrame(render);
+            };
+            fallbackImg.onerror = () => {
+                console.error('Failed to load background image');
+                state.background.isLoaded = false;
+            };
         };
 
         const initialVersion = window.MAP_VERSION || 'V1';
@@ -358,35 +365,6 @@
         }
     }
 
-    const roadNameImages = {}; // Cache for road name images
-
-    function processRoadNames() {
-        if (window.ROAD_NAMES) {
-            window.ROAD_NAMES.forEach(roadName => {
-                const feature = {
-                    type: "Feature",
-                    properties: {
-                        type: "roadName",
-                        name: roadName.name,
-                        image: roadName.image || null,
-                        rotation: roadName.rotation || 0
-                    },
-                    geometry: { type: "Point", coordinates: [roadName.lon, roadName.lat] },
-                    _bounds: { minX: roadName.lon, maxX: roadName.lon, minY: roadName.lat, maxY: roadName.lat }
-                };
-                state.layers.roadNames.push(feature);
-
-                if (roadName.image && !roadNameImages[roadName.image]) {
-                    const img = new Image();
-                    img.src = roadName.image;
-                    img.onload = () => requestAnimationFrame(render);
-                    img.onerror = () => console.error(`Road Name: Failed to load image: ${roadName.image}`);
-                    roadNameImages[roadName.image] = img;
-                }
-            });
-        }
-    }
-
     function setupToggles() {
         Object.keys(toggles).forEach(key => {
             if (!toggles[key]) return;
@@ -397,17 +375,6 @@
             state.toggles[key] = toggles[key].checked;
         });
 
-        // Add the new road names toggle
-        const roadNamesToggle = document.getElementById('toggle-road-names');
-        if (roadNamesToggle) {
-            roadNamesToggle.onchange = (e) => {
-                state.toggles.roadNames = e.target.checked;
-                requestAnimationFrame(render);
-            };
-            state.toggles.roadNames = roadNamesToggle.checked;
-        }
-
-        // Add the new background toggle
         const backgroundToggle = document.getElementById('toggle-background');
         if (backgroundToggle) {
             backgroundToggle.onchange = (e) => {
@@ -415,8 +382,6 @@
                 requestAnimationFrame(render);
             };
             state.toggles.background = backgroundToggle.checked;
-        } else {
-            console.error('Background Debug: HTML element with id "toggle-background" not found!');
         }
     }
 
@@ -491,6 +456,10 @@
 
             state.viewX = canvas.width / 2;
             state.viewY = canvas.height / 2;
+
+            updateMinZoom();
+            if (state.zoom < state.minZoom) state.zoom = state.minZoom;
+            clampView();
         }
 
         if (loader) {
@@ -501,11 +470,55 @@
         requestAnimationFrame(render);
     }
 
-    // --- Interaction ---
+    // --- Interaction & View Clamping ---
+    function updateMinZoom() {
+        const bg = state.background;
+        if (bg.isLoaded && bg.widthInMapUnits > 0 && bg.heightInMapUnits > 0 && canvas.width > 0 && canvas.height > 0) {
+            const bgW = bg.widthInMapUnits * state.calibration.sx;
+            const bgH = bg.heightInMapUnits * Math.abs(state.calibration.sy);
+            // Clamps minZoom so the canvas never zooms out smaller than the background image
+            state.minZoom = Math.max(canvas.width / bgW, canvas.height / bgH);
+        } else {
+            state.minZoom = 0.05;
+        }
+    }
+
+    function clampView() {
+        updateMinZoom();
+        state.zoom = Math.max(state.minZoom, Math.min(state.maxZoom || 2000, state.zoom));
+
+        const bg = state.background;
+        if (!bg.isLoaded) return;
+
+        const p = transform(bg.centerLon, bg.centerLat);
+        const w = bg.widthInMapUnits * state.calibration.sx;
+        const h = bg.heightInMapUnits * Math.abs(state.calibration.sy);
+        const b = { minX: p.x - w / 2, maxX: p.x + w / 2, minY: p.y - h / 2, maxY: p.y + h / 2 };
+        const z = state.zoom;
+
+        const minViewX = canvas.width - b.maxX * z;
+        const maxViewX = -b.minX * z;
+        if (minViewX > maxViewX) {
+            state.viewX = (minViewX + maxViewX) / 2;
+        } else {
+            state.viewX = Math.max(minViewX, Math.min(maxViewX, state.viewX));
+        }
+
+        const minViewY = canvas.height - b.maxY * z;
+        const maxViewY = -b.minY * z;
+        if (minViewY > maxViewY) {
+            state.viewY = (minViewY + maxViewY) / 2;
+        } else {
+            state.viewY = Math.max(minViewY, Math.min(maxViewY, state.viewY));
+        }
+    }
+
     function resize() {
         const container = canvas.parentElement;
+        if (!container) return;
         canvas.width = container.clientWidth;
         canvas.height = container.clientHeight;
+        clampView();
         requestAnimationFrame(render);
     }
 
@@ -531,6 +544,7 @@
         state.viewY += e.clientY - lastY;
         lastX = e.clientX;
         lastY = e.clientY;
+        clampView();
         requestAnimationFrame(render);
     };
 
@@ -543,10 +557,12 @@
 
         const worldX = (mouseX - state.viewX) / state.zoom;
         const worldY = (mouseY - state.viewY) / state.zoom;
-        state.zoom *= factor;
-        state.zoom = Math.max(0.01, Math.min(2000, state.zoom));
+
+        updateMinZoom();
+        state.zoom = Math.max(state.minZoom, Math.min(state.maxZoom || 2000, state.zoom * factor));
         state.viewX = mouseX - worldX * state.zoom;
         state.viewY = mouseY - worldY * state.zoom;
+        clampView();
         requestAnimationFrame(render);
     };
 
@@ -642,7 +658,7 @@
     }
 
     function render() {
-        ctx.fillStyle = "#080808"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#0c131d"; ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.save(); ctx.translate(state.viewX, state.viewY); ctx.scale(state.zoom, state.zoom);
         const zoom = state.zoom;
         const detailLevel = zoom > 1.5 ? 2 : (zoom > 0.5 ? 1 : 0);
@@ -687,25 +703,60 @@
             if (isHouse && zoom > 0.5) { ctx.strokeStyle = "rgba(255,255,255,0.1)"; ctx.lineWidth = 0.5 / zoom; ctx.stroke(); }
         });
 
-        // 3. Roads
-        const drawRoadBatch = (isSecret, color, width) => {
+        // 3. Roads (Passes matching main repo style)
+        ctx.lineCap = "round"; ctx.lineJoin = "round";
+        const regularRoads = [];
+        const secretRoads = [];
+        for (let i = 0; i < state.layers.roads.length; i++) {
+            const f = state.layers.roads[i];
+            if (!isVisible(f._bounds)) continue;
+            if (f.properties && f.properties.secret) secretRoads.push(f);
+            else regularRoads.push(f);
+        }
+
+        // Pass A: Road Casings
+        // 1. Secret Road Outer Dark Border + Tan Base
+        if (secretRoads.length > 0) {
             ctx.beginPath();
-            state.layers.roads.forEach(f => {
-                if (f.properties.secret !== isSecret) return;
-                if (detailLevel === 0 && f.properties.roadType === 'local') return;
-                if (!isVisible(f._bounds)) return;
-                drawGeometry(f.geometry);
-            });
-            ctx.strokeStyle = color; ctx.lineWidth = width / zoom; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
-        };
-        drawRoadBatch(false, "#e1b12c", detailLevel === 0 ? 3 : 1.5);
-        drawRoadBatch(true, "#ffffff", detailLevel === 0 ? 4 : 2);
+            secretRoads.forEach(f => drawGeometry(f.geometry));
+            ctx.strokeStyle = "#090a0f"; ctx.lineWidth = (detailLevel === 0 ? 7.2 : 5.0) / zoom; ctx.stroke();
+
+            ctx.beginPath();
+            secretRoads.forEach(f => drawGeometry(f.geometry));
+            ctx.strokeStyle = "#d4a373"; ctx.lineWidth = (detailLevel === 0 ? 5.4 : 3.8) / zoom; ctx.stroke();
+        }
+
+        // 2. Regular Roads Orange Outline
+        if (regularRoads.length > 0) {
+            ctx.beginPath();
+            regularRoads.forEach(f => drawGeometry(f.geometry));
+            ctx.strokeStyle = "#ea580c"; ctx.lineWidth = (detailLevel === 0 ? 7.2 : 5.0) / zoom; ctx.stroke();
+        }
+
+        // Pass B: Road Fills
+        // 1. Regular Roads Yellow Core
+        if (regularRoads.length > 0) {
+            ctx.beginPath();
+            regularRoads.forEach(f => drawGeometry(f.geometry));
+            ctx.strokeStyle = "#facc15"; ctx.lineWidth = (detailLevel === 0 ? 4.8 : 3.2) / zoom; ctx.stroke();
+        }
+
+        // 2. Secret Roads Brown Dashes
+        if (secretRoads.length > 0) {
+            ctx.beginPath();
+            secretRoads.forEach(f => drawGeometry(f.geometry));
+            ctx.strokeStyle = "#5c3a21"; ctx.lineWidth = (detailLevel === 0 ? 3.2 : 2.2) / zoom;
+            ctx.setLineDash([7 / zoom, 4.5 / zoom]); ctx.stroke(); ctx.setLineDash([]);
+        }
 
         // 4. Ferries
-        ctx.beginPath();
-        state.layers.ferries.forEach(f => { if (!isVisible(f._bounds)) return; drawGeometry(f.geometry); });
-        ctx.strokeStyle = "#4aa3df"; ctx.lineWidth = (detailLevel === 0 ? 4 : 2) / zoom;
-        ctx.setLineDash([8 / zoom, 4 / zoom]); ctx.stroke(); ctx.setLineDash([]);
+        const visibleFerries = state.layers.ferries.filter(f => isVisible(f._bounds));
+        if (visibleFerries.length > 0) {
+            ctx.beginPath();
+            visibleFerries.forEach(f => drawGeometry(f.geometry));
+            ctx.strokeStyle = "#0284c7"; ctx.lineWidth = (detailLevel === 0 ? 4.2 : 2.8) / zoom;
+            ctx.setLineDash([8 / zoom, 5 / zoom]); ctx.stroke(); ctx.setLineDash([]);
+        }
 
         // 5. POIs (Ferry Ports)
         state.layers.pois.forEach(f => {
@@ -730,46 +781,23 @@
             });
         }
 
-        // 7. Road Names
-        if (state.toggles.roadNames) {
-            state.layers.roadNames.forEach(f => {
-                if (!isVisible(f._bounds)) return;
-                const p = transform(f.geometry.coordinates[0], f.geometry.coordinates[1]);
-
-                ctx.save();
-                ctx.translate(p.x, p.y);
-                if (f.properties.rotation) {
-                    ctx.rotate(f.properties.rotation * Math.PI / 180);
-                }
-
-                if (f.properties.image && roadNameImages[f.properties.image] && roadNameImages[f.properties.image].complete) {
-                    const img = roadNameImages[f.properties.image];
-                    const imgWidth = img.width / (zoom * 2); // Default image size
-                    const imgHeight = img.height / (zoom * 2); // Default image size
-                    ctx.drawImage(img, -imgWidth / 2, -imgHeight / 2, imgWidth, imgHeight);
-                } else if (f.properties.name) {
-                    ctx.font = `bold ${12 / zoom}px sans-serif`; // Default font size
-                    ctx.fillStyle = "#fff";
-                    ctx.strokeStyle = "#000";
-                    ctx.lineWidth = 2 / zoom;
-                    ctx.textAlign = "center";
-                    ctx.textBaseline = "middle";
-                    ctx.strokeText(f.properties.name, 0, 0);
-                    ctx.fillText(f.properties.name, 0, 0);
-                }
-                ctx.restore();
-            });
-        }
-
-        // 8. Cities
+        // 7. Cities
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         state.layers.cities.forEach(f => {
             if (!isVisible(f._bounds)) return;
             const p = transform(f.geometry.coordinates[0], f.geometry.coordinates[1]);
-            ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(p.x, p.y, 4 / zoom, 0, Math.PI * 2); ctx.fill();
+            // City Marker: Outer White Ring + Red Center Bullseye
+            ctx.fillStyle = "#ffffff"; ctx.strokeStyle = "#000000"; ctx.lineWidth = 1.5 / zoom;
+            ctx.beginPath(); ctx.arc(p.x, p.y, 4.5 / zoom, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(p.x, p.y, 2.2 / zoom, 0, Math.PI * 2); ctx.fill();
+
             if (zoom > 0.05) {
-                ctx.save(); ctx.font = `bold ${13 / zoom}px sans-serif`; ctx.fillStyle = "#fff"; ctx.strokeStyle = "#000"; ctx.lineWidth = 4 / zoom;
-                ctx.strokeText(f.properties.name.toUpperCase(), p.x, p.y - 12 / zoom); ctx.fillText(f.properties.name.toUpperCase(), p.x, p.y - 12 / zoom); ctx.restore();
+                ctx.save();
+                ctx.font = `bold ${12 / zoom}px 'JetBrains Mono', ui-monospace, sans-serif`;
+                ctx.fillStyle = "#ffffff"; ctx.strokeStyle = "rgba(0, 0, 0, 0.95)"; ctx.lineWidth = 4 / zoom;
+                ctx.strokeText(f.properties.name.toUpperCase(), p.x, p.y - 12 / zoom);
+                ctx.fillText(f.properties.name.toUpperCase(), p.x, p.y - 12 / zoom);
+                ctx.restore();
             }
         });
 

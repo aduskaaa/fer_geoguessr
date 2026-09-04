@@ -125,27 +125,35 @@
             }
         }
 
-        /* ----- FLOATING MAP ----- */
-        #map-container {
+        /* ----- FLOATING MAP & CONTROLS ----- */
+        #map-wrapper {
             position: absolute;
-            bottom: 30px;
-            right: 30px;
+            bottom: 25px;
+            right: 25px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 10px;
+        }
+
+        #map-container {
             width: 320px;
             height: 220px;
             border: 2px solid var(--glass-border);
             border-radius: 16px;
             overflow: hidden;
             box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
-            transition: all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1);
-            z-index: 1000;
+            transition: width 0.35s cubic-bezier(0.165, 0.84, 0.44, 1), height 0.35s cubic-bezier(0.165, 0.84, 0.44, 1), border-color 0.3s ease;
             background: var(--bg);
+            position: relative;
         }
 
+        #map-wrapper:hover #map-container,
         #map-container:hover {
             width: 550px;
             height: 380px;
             border-color: var(--accent);
-            transform: translateY(-5px);
         }
 
         #map-canvas {
@@ -153,6 +161,28 @@
             height: 100%;
             display: block;
             cursor: crosshair;
+        }
+
+        #game-controls {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+        }
+
+        #btn-submit {
+            flex: 2;
+            padding: 13px 20px;
+            font-size: 13px;
+            font-weight: 900;
+            letter-spacing: 1.5px;
+        }
+
+        #btn-leave {
+            flex: 1;
+            padding: 13px 16px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 1px;
         }
 
         /* ----- BUTTONS ----- */
@@ -364,8 +394,18 @@
 <body>
     <header class="header">
         <h2>FAR EAST RUSSIA GEOGUESSR</h2>
-        <button id="btn-leave" class="btn btn-secondary" style="padding: 8px 15px; font-size: 10px; display: none;"
-            onclick="location.reload()">Leave Game</button>
+        <div class="header-badges" style="display: flex; align-items: center; gap: 10px;">
+            <div id="hud-map-version" class="room-badge" style="display: inline-block; color: var(--accent); padding: 6px 14px; font-size: 11px;">
+                MAP: V1
+            </div>
+            <div id="room-id-badge" class="room-badge" style="display: none; cursor: pointer; padding: 6px 14px; font-size: 11px;" onclick="copyRoomCode()" title="Click to copy">
+                ROOM: <span id="room-id-text" style="color: var(--accent); font-family: monospace;">-</span>
+                <span id="copy-status" style="font-size: 8px; margin-left: 6px; opacity: 0.5;">(COPY)</span>
+            </div>
+            <div id="players-count-badge" class="room-badge" style="display: none; padding: 6px 14px; font-size: 11px;">
+                <span id="players-count-text">1</span> PLAYERS
+            </div>
+        </div>
     </header>
 
     <main id="map-root">
@@ -378,50 +418,25 @@
         <div id="round-info" style="display: none;">ROUND 1 / 5</div>
         <div id="timer-info">1:00</div>
 
-        <div class="hud-top-left">
-            <p id="player-name-display"
-                style="color: var(--accent); margin: 0; font-weight: 900; font-size: 12px; letter-spacing: 2px;">PLAYER:
-                -</p>
-            <div id="hud-map-version"
-                style="margin-top: 5px; display: inline-block; background: rgba(0,0,0,0.6); backdrop-filter: blur(10px); padding: 4px 10px; border-radius: 6px; border: 1px solid var(--glass-border); font-size: 10px; font-weight: 800; letter-spacing: 1px; color: var(--accent);">
-                MAP: V1
-            </div>
-        </div>
-
-        <div class="hud-top-right">
-            <div id="room-id-badge" class="room-badge" style="display: none; cursor: pointer;" onclick="copyRoomCode()"
-                title="Click to copy">
-                ROOM: <span id="room-id-text" style="color: var(--accent); font-family: monospace;">-</span>
-                <span id="copy-status" style="font-size: 8px; margin-left: 8px; opacity: 0.5;">(CLICK TO COPY)</span>
-            </div>
-            <div id="players-count-badge" class="room-badge" style="display: none;"><span
-                    id="players-count-text">1</span> PLAYERS</div>
-        </div>
-
         <div id="photo-loader">
             <div class="spinner"></div>
         </div>
         <img id="photo-background" src="" alt="Photo"
             onload="document.getElementById('photo-loader').style.display='none'; this.style.opacity=1;">
 
-        <div id="map-container">
-            <canvas id="map-canvas"></canvas>
-            <div
-                style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 5px 12px; border-radius: 8px; color: #fff; font-size: 10px; font-weight: 800; border: 1px solid var(--glass-border); pointer-events: none;">
-                INTERACTIVE MAP <span id="mini-map-version-tag" style="color: var(--accent); margin-left: 4px;">V1</span></div>
-            <div
-                style="position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 6px; display: flex; gap: 10px; z-index: 1001;">
-                <label style="font-size: 9px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                    <input type="checkbox" id="toggle-background" checked style="margin: 0;"> BG
-                </label>
-                <label style="font-size: 9px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                    <input type="checkbox" id="toggle-road-names" checked style="margin: 0;"> ROADS
-                </label>
+        <div id="map-wrapper">
+            <div id="map-container">
+                <canvas id="map-canvas"></canvas>
+                <div
+                    style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 5px 12px; border-radius: 8px; color: #fff; font-size: 10px; font-weight: 800; border: 1px solid var(--glass-border); pointer-events: none; z-index: 1001;">
+                    FAR EAST RUSSIA <span id="mini-map-version-tag" style="color: var(--accent); margin-left: 4px;">V1</span>
+                </div>
             </div>
-        </div>
 
-        <div id="game-controls" style="position: absolute; bottom: 30px; left: 30px; z-index: 1000;">
-            <button id="btn-submit" class="btn" disabled onclick="submitGuess()">Submit Guess</button>
+            <div id="game-controls">
+                <button id="btn-submit" class="btn" disabled onclick="submitGuess()">GUESS</button>
+                <button id="btn-leave" class="btn btn-secondary" onclick="location.reload()">LEAVE</button>
+            </div>
         </div>
 
         <!-- Lobby Modal -->
@@ -448,13 +463,11 @@
                     <div class="input-group" style="margin-top: 15px;">
                         <label>MAP VERSION</label>
                         <div style="display: flex; gap: 10px; margin-top: 8px;">
-                            <button type="button" id="btn-map-v1" class="btn btn-version active" onclick="setMapVersion('V1')" style="flex: 1; padding: 12px 6px; font-size: 11px;">
-                                <div>V1 (CLASSIC)</div>
-                                <div style="font-size: 9px; opacity: 0.7; font-weight: normal; margin-top: 3px;">11,449 locations</div>
+                            <button type="button" id="btn-map-v1" class="btn btn-version active" onclick="setMapVersion('V1')" style="flex: 1; padding: 14px 10px; font-size: 13px; font-weight: 900;">
+                                V1
                             </button>
-                            <button type="button" id="btn-map-v2" class="btn btn-version" onclick="setMapVersion('V2')" style="flex: 1; padding: 12px 6px; font-size: 11px;">
-                                <div>V2 (EXPANDED)</div>
-                                <div style="font-size: 9px; opacity: 0.7; font-weight: normal; margin-top: 3px;">13,910 locations</div>
+                            <button type="button" id="btn-map-v2" class="btn btn-version" onclick="setMapVersion('V2')" style="flex: 1; padding: 14px 10px; font-size: 13px; font-weight: 900;">
+                                V2
                             </button>
                         </div>
                     </div>
@@ -481,10 +494,10 @@
                     <div id="lobby-waiting-version-container" style="text-align: left; margin-bottom: 20px;">
                         <label style="font-size: 11px; font-weight: 900; color: #555;">MAP VERSION</label>
                         <div id="host-version-toggle" style="display: flex; gap: 10px; margin-top: 8px;">
-                            <button type="button" id="btn-waiting-v1" class="btn btn-version active" onclick="setMapVersion('V1')" style="flex: 1; padding: 10px 5px; font-size: 10px;">V1 (Classic)</button>
-                            <button type="button" id="btn-waiting-v2" class="btn btn-version" onclick="setMapVersion('V2')" style="flex: 1; padding: 10px 5px; font-size: 10px;">V2 (Expanded)</button>
+                            <button type="button" id="btn-waiting-v1" class="btn btn-version active" onclick="setMapVersion('V1')" style="flex: 1; padding: 12px 10px; font-size: 12px; font-weight: 900;">V1</button>
+                            <button type="button" id="btn-waiting-v2" class="btn btn-version" onclick="setMapVersion('V2')" style="flex: 1; padding: 12px 10px; font-size: 12px; font-weight: 900;">V2</button>
                         </div>
-                        <div id="client-version-display" style="display: none; margin-top: 8px; font-size: 12px; font-weight: 800; color: var(--accent); background: rgba(255,255,255,0.03); padding: 10px 15px; border-radius: 8px; border: 1px solid var(--glass-border);">V1 (Classic Map)</div>
+                        <div id="client-version-display" style="display: none; margin-top: 8px; font-size: 12px; font-weight: 800; color: var(--accent); background: rgba(255,255,255,0.03); padding: 10px 15px; border-radius: 8px; border: 1px solid var(--glass-border); text-align: center;">V1</div>
                     </div>
                     <button id="btn-start-game" class="btn" style="width: 100%;" onclick="hostStartGame()">Start
                         Game</button>
@@ -512,7 +525,6 @@
     <script src="assets/streetview/data-v2.js"></script>
     <script src="assets/Interactive Map/Map DATA/fer-geojson.js"></script>
     <script src="assets/Interactive Map/Map DATA/fer-geojson-v2.js"></script>
-    <script src="assets/Interactive Map/Map DATA/fer-road-names.js"></script>
     <script src="assets/interactive-map.js"></script>
     <script src="assets/peer-service.js"></script>
     <script src="assets/geoguessr.js"></script>

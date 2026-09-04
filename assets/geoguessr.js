@@ -250,7 +250,7 @@
         }
         const clientVersionDisplay = document.getElementById('client-version-display');
         if (clientVersionDisplay) {
-            clientVersionDisplay.innerText = version === 'V2' ? 'V2 (Expanded Map)' : 'V1 (Classic Map)';
+            clientVersionDisplay.innerText = version;
         }
         const hudBadge = document.getElementById('hud-map-version');
         if (hudBadge) {
@@ -380,7 +380,9 @@
         }
 
         if (!state.players[peerService.getPeerId()]) return;
-        el.playerNameDisplay.innerText = `PLAYER: ${peerService.getPlayerName().toUpperCase()}`;
+        if (el.playerNameDisplay) {
+            el.playerNameDisplay.innerText = `PLAYER: ${peerService.getPlayerName().toUpperCase()}`;
+        }
         el.roundInfo.innerText = `ROUND ${state.currentRound} / ${MAX_ROUNDS}`;
         el.playersCountText.innerText = Object.keys(state.players).length;
         const mins = Math.floor(state.timeLeft / 60);
@@ -427,20 +429,15 @@
                     clearStreetViewOverlay();
                 }
             }
-        }
-
-        if (state.gameState === "guessing") {
-            el.scoreboard.style.display = 'none';
-            el.btnSubmit.style.display = 'block';
             const hasGuessedThisRound = state.localHasGuessed && state.localLastGuessedRound === state.currentRound;
             const serverSaysGuessed = state.players[peerService.getPeerId()].hasGuessed;
 
             if (hasGuessedThisRound || serverSaysGuessed) {
                 el.btnSubmit.disabled = true;
-                el.btnSubmit.innerText = "Guessed!";
+                el.btnSubmit.innerText = "GUESSED";
                 el.btnSubmit.style.background = "#333";
             } else {
-                el.btnSubmit.innerText = "Submit Guess";
+                el.btnSubmit.innerText = "GUESS";
                 el.btnSubmit.style.background = "";
                 const curGuess = window.MapEngine.getGuess();
                 el.btnSubmit.disabled = (curGuess === null);
@@ -498,16 +495,13 @@
         } else { player.score = 0; player.lastDist = 9999; }
         player.totalScore += player.score;
         const allGuessed = Object.values(state.players).every(p => p.hasGuessed);
-        if (allGuessed) {
-            state.gameState = "results";
-            if (state.timerInterval) clearInterval(state.timerInterval);
-            broadcastState();
-        } else broadcastState();
+        if (allGuessed) finishRound();
+        else broadcastState();
     }
 
     function calculateScore(dist) {
-        if (dist < 0.05) return 5000;
-        return Math.max(0, Math.round(5000 * Math.exp(-dist / SCORE_K)));
+        if (dist > 3000) return 0;
+        return Math.max(0, Math.round(5000 * Math.exp(-dist / 800)));
     }
 
     function getHaversineDistance(lon1, lat1, lon2, lat2) {
@@ -528,9 +522,14 @@
             const row = document.createElement('div');
             row.className = 'score-row';
             if (idx === 0 && state.gameState === "finished") row.style.color = "#f1c40f";
-            let sc = (p.score === 0) ? `<span style="color:#e74c3c">MISS</span>` : `+${p.score}`;
-            row.innerHTML = `<span>${idx + 1}. ${p.name} ${idx === 0 && state.gameState === "finished" ? '👑' : ''}</span>
-                             <span>${sc} <span style="font-size:10px;opacity:0.7">(${p.lastDist ? p.lastDist.toFixed(1) : '-'} km)</span> <strong>${p.totalScore}</strong></span>`;
+            if (state.gameState === "finished") {
+                row.innerHTML = `<span>${idx + 1}. ${p.name} ${idx === 0 ? '👑' : ''}</span>
+                                 <span><strong>${p.totalScore} pts</strong></span>`;
+            } else {
+                let sc = (p.score === 0) ? `+0` : `+${p.score}`;
+                row.innerHTML = `<span>${idx + 1}. ${p.name}</span>
+                                 <span>${sc} <span style="font-size:10px;opacity:0.7">(${p.lastDist ? p.lastDist.toFixed(1) : '-'} km)</span> <strong>${p.totalScore}</strong></span>`;
+            }
             el.scoreList.appendChild(row);
         });
         if (peerService.getIsHost()) {
