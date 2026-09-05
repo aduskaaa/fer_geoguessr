@@ -5,9 +5,21 @@
     const ROUND_TIME = 60; // 60 seconds
     const SCORE_K = 288; // Score coefficient for km distance
 
+    const STREETVIEW_MIRRORS = [
+        (v, f) => `https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/${v}/${f}`,
+        (v, f) => `https://fastly.jsdelivr.net/gh/aduskaaa/fer-streetview@main/${v}/${f}`,
+        (v, f) => `https://raw.githubusercontent.com/aduskaaa/fer-streetview/main/${v}/${f}`
+    ];
+
     function getStreetViewBaseUrl(version) {
         const v = (version || state.mapVersion || 'V1').toUpperCase();
-        return `https://raw.githubusercontent.com/aduskaaa/fer-streetview/main/${v}/`;
+        return `https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/${v}/`;
+    }
+
+    function getStreetViewUrl(version, file, mirrorIndex = 0) {
+        const v = (version || state.mapVersion || 'V1').toUpperCase();
+        const fn = STREETVIEW_MIRRORS[mirrorIndex % STREETVIEW_MIRRORS.length];
+        return fn(v, file);
     }
 
     function getCurrentStreetViewData(version) {
@@ -94,11 +106,27 @@
         updateMapVersionUI(state.mapVersion);
 
         el.photoToGuess.onerror = function () {
-            if (this.src && this.src.includes('cdn.jsdelivr.net')) {
-                this.src = this.src.replace('https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/', 'https://raw.githubusercontent.com/aduskaaa/fer-streetview/main/');
+            console.warn('[PhotoToGuess] Image load error on element, attempting mirror fallback:', this.src);
+            const currentSrc = this.src || '';
+            const filenameMatch = currentSrc.match(/(\d+\.jpg)/);
+            if (filenameMatch) {
+                const filename = filenameMatch[1];
+                const version = (state.mapVersion || 'V1').toUpperCase();
+                if (currentSrc.includes('cdn.jsdelivr.net')) {
+                    this.src = `https://fastly.jsdelivr.net/gh/aduskaaa/fer-streetview@main/${version}/${filename}?t=${Date.now()}`;
+                } else if (currentSrc.includes('fastly.jsdelivr.net')) {
+                    this.src = `https://raw.githubusercontent.com/aduskaaa/fer-streetview/main/${version}/${filename}?t=${Date.now()}`;
+                } else if (!currentSrc.includes('?retry=')) {
+                    this.src = `https://cdn.jsdelivr.net/gh/aduskaaa/fer-streetview@main/${version}/${filename}?retry=${Date.now()}`;
+                } else {
+                    const loader = document.getElementById('photo-loader');
+                    if (loader) loader.style.display = 'none';
+                    this.style.opacity = '1';
+                }
             } else {
                 const loader = document.getElementById('photo-loader');
                 if (loader) loader.style.display = 'none';
+                this.style.opacity = '1';
             }
         };
 
@@ -434,18 +462,13 @@
             state.localHasGuessed = false; // RESET LOCAL LOCK
 
             if (state.currentPhoto) {
-                document.getElementById('photo-loader').style.display = 'flex';
-                el.photoToGuess.style.opacity = '0';
-                el.photoToGuess.src = state.currentPhoto.photo;
-
-                // Check if this is a streetview photo
-                if (state.currentPhoto.photo && state.currentPhoto.photo.includes('streetview')) {
-                    const svIdMatch = state.currentPhoto.name.match(/#(\d+)/);
-                    if (svIdMatch && window.MapEngine && window.MapEngine.findBestStreetViewOptions) {
-                        renderStreetViewOverlay(parseInt(svIdMatch[1]), state.currentPhoto.lon, state.currentPhoto.lat);
-                    }
+                const isSV = state.currentPhoto.photo && (state.currentPhoto.photo.includes('streetview') || (state.currentPhoto.name && state.currentPhoto.name.includes('Streetview')));
+                if (isSV) {
+                    const svIdMatch = state.currentPhoto.name ? state.currentPhoto.name.match(/#(\d+)/) : null;
+                    const svId = svIdMatch ? parseInt(svIdMatch[1]) : null;
+                    loadActivePhoto(state.currentPhoto.photo, true, svId, state.currentPhoto.lon, state.currentPhoto.lat);
                 } else {
-                    clearStreetViewOverlay();
+                    loadActivePhoto(state.currentPhoto.photo, false);
                 }
             }
             if (!window.MapEngine.isGuessingMode()) window.MapEngine.setGuessingMode(true);
@@ -716,24 +739,80 @@
         overlay.appendChild(clusterWrap);
     }
 
+    let currentPhotoLoadId = 0;
+
+    function loadActivePhoto(fileOrUrl, isStreetView = false, svId = null, lon = null, lat = null, targetBearing = null) {
+        const loadId = ++currentPhotoLoadId;
+        const loader = document.getElementById('photo-loader');
+        if (loader) loader.style.display = 'flex';
+
+        let mirrorIndex = 0;
+        let triedCacheBust = false;
+
+        function attempt(url) {
+            const img = new Image();
+
+            img.onload = function () {
+                if (loadId !== currentPhotoLoadId) return; // Discard superseded load request
+                el.photoToGuess.src = img.src;
+                el.photoToGuess.style.opacity = '1';
+                if (loader) loader.style.display = 'none';
+
+                if (isStreetView && svId !== null && lon !== null && lat !== null) {
+                    renderStreetViewOverlay(svId, lon, lat, targetBearing);
+                } else if (!isStreetView) {
+                    clearStreetViewOverlay();
+                }
+            };
+
+            img.onerror = function () {
+                if (loadId !== currentPhotoLoadId) return;
+                console.warn(`[PhotoLoader] Load failed/truncated for: ${url} (mirror #${mirrorIndex})`);
+
+                if (isStreetView && fileOrUrl) {
+                    const filenameMatch = fileOrUrl.match(/(\d+\.jpg)/);
+                    const filename = filenameMatch ? filenameMatch[1] : fileOrUrl.split('/').pop().split('?')[0];
+
+                    mirrorIndex++;
+                    if (mirrorIndex < STREETVIEW_MIRRORS.length) {
+                        const nextUrl = getStreetViewUrl(state.mapVersion, filename, mirrorIndex);
+                        attempt(nextUrl);
+                        return;
+                    } else if (!triedCacheBust) {
+                        triedCacheBust = true;
+                        // Bust any corrupted browser cache entry for this image
+                        const busterUrl = `${getStreetViewUrl(state.mapVersion, filename, 0)}?retry=${Date.now()}`;
+                        attempt(busterUrl);
+                        return;
+                    }
+                }
+
+                // If all attempts exhausted, ensure loader is hidden and photo is visible
+                el.photoToGuess.style.opacity = '1';
+                if (loader) loader.style.display = 'none';
+            };
+
+            img.src = url;
+        }
+
+        let initialUrl = fileOrUrl;
+        if (isStreetView && !fileOrUrl.startsWith('http')) {
+            initialUrl = getStreetViewUrl(state.mapVersion, fileOrUrl, 0);
+        }
+        attempt(initialUrl);
+    }
+
     function navigateToStreetView(index, targetBearing) {
         if (!window.MapEngine || !window.MapEngine.getStreetViewData) return;
         const svData = window.MapEngine.getStreetViewData(index);
         if (!svData) return;
 
-        // Visual fade
-        document.getElementById('photo-loader').style.display = 'flex';
-        el.photoToGuess.style.opacity = '0';
+        const newLon = svData.geometry.coordinates[0];
+        const newLat = svData.geometry.coordinates[1];
+        const svId = svData.properties.id;
+        const file = svData.properties.file;
 
-        const baseUrl = getStreetViewBaseUrl(state.mapVersion);
-        setTimeout(() => {
-            el.photoToGuess.src = `${baseUrl}${svData.properties.file}`;
-            const newLon = svData.geometry.coordinates[0];
-            const newLat = svData.geometry.coordinates[1];
-
-            // Pass the bearing we wanted to look at, so the new node bases its "forward" relative to that bearing
-            renderStreetViewOverlay(svData.properties.id, newLon, newLat, targetBearing);
-        }, 150);
+        loadActivePhoto(file, true, svId, newLon, newLat, targetBearing);
     }
 
     window.hostNextRound = function () { if (peerService.getIsHost()) startNextRound(); };
