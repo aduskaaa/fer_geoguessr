@@ -289,6 +289,7 @@
     }
 
     function finishRound() {
+        if (state.timerInterval) clearInterval(state.timerInterval);
         Object.keys(state.players).forEach(id => {
             if (!state.players[id].hasGuessed) handlePlayerGuess(id, { lon: 0, lat: 0 });
         });
@@ -298,6 +299,9 @@
 
     function startNewGame() {
         state.currentRound = 0;
+        lastRoundSeen = -1;
+        state.localHasGuessed = false;
+        state.localLastGuessedRound = -1;
         Object.values(state.players).forEach(p => { p.score = 0; p.totalScore = 0; p.hasGuessed = false; p.currentGuess = null; });
         const svList = getCurrentStreetViewData(state.mapVersion);
         const baseUrl = getStreetViewBaseUrl(state.mapVersion);
@@ -392,6 +396,7 @@
         else el.timerInfo.classList.remove('timer-low');
 
         if (state.gameState === "lobby") {
+            el.scoreboard.style.display = 'none';
             el.playersListContainer.innerHTML = '';
             Object.values(state.players).forEach(p => {
                 const pBadge = document.createElement('div');
@@ -409,7 +414,21 @@
         el.timerInfo.style.display = (state.gameState === "guessing") ? 'block' : 'none';
         el.roundInfo.style.display = 'block';
 
-        if (state.currentRound !== lastRoundSeen) {
+        // 1. Manage Scoreboard visibility based on game state
+        if (state.gameState === "results" || state.gameState === "finished") {
+            showScoreboard();
+            if (state.currentPhoto) {
+                window.MapEngine.setActualLocation(state.currentPhoto.lon, state.currentPhoto.lat);
+            }
+            window.MapEngine.setPlayerGuesses(state.players);
+            el.btnSubmit.disabled = true;
+        } else {
+            // ALWAYS hide scoreboard during active round / guessing phase
+            el.scoreboard.style.display = 'none';
+        }
+
+        // 2. Initialize new round when entering guessing mode with a new round
+        if (state.gameState === "guessing" && state.currentRound !== lastRoundSeen) {
             window.MapEngine.initRound();
             lastRoundSeen = state.currentRound;
             state.localHasGuessed = false; // RESET LOCAL LOCK
@@ -420,7 +439,7 @@
                 el.photoToGuess.src = state.currentPhoto.photo;
 
                 // Check if this is a streetview photo
-                if (state.currentPhoto.photo.includes('streetview')) {
+                if (state.currentPhoto.photo && state.currentPhoto.photo.includes('streetview')) {
                     const svIdMatch = state.currentPhoto.name.match(/#(\d+)/);
                     if (svIdMatch && window.MapEngine && window.MapEngine.findBestStreetViewOptions) {
                         renderStreetViewOverlay(parseInt(svIdMatch[1]), state.currentPhoto.lon, state.currentPhoto.lat);
@@ -429,8 +448,14 @@
                     clearStreetViewOverlay();
                 }
             }
+            if (!window.MapEngine.isGuessingMode()) window.MapEngine.setGuessingMode(true);
+        }
+
+        // 3. Update GUESS button state during guessing phase
+        if (state.gameState === "guessing") {
+            const myPlayer = state.players[peerService.getPeerId()];
             const hasGuessedThisRound = state.localHasGuessed && state.localLastGuessedRound === state.currentRound;
-            const serverSaysGuessed = state.players[peerService.getPeerId()].hasGuessed;
+            const serverSaysGuessed = myPlayer && myPlayer.hasGuessed;
 
             if (hasGuessedThisRound || serverSaysGuessed) {
                 el.btnSubmit.disabled = true;
@@ -442,11 +467,6 @@
                 const curGuess = window.MapEngine.getGuess();
                 el.btnSubmit.disabled = (curGuess === null);
             }
-            if (!window.MapEngine.isGuessingMode()) window.MapEngine.setGuessingMode(true);
-        } else if (state.gameState === "results" || state.gameState === "finished") {
-            showScoreboard();
-            window.MapEngine.setActualLocation(state.currentPhoto.lon, state.currentPhoto.lat);
-            window.MapEngine.setPlayerGuesses(state.players);
         }
     }
 
@@ -544,7 +564,7 @@
                 btn.onclick = () => startNewGame();
             } else {
                 document.getElementById('scoreboard-title').innerText = "ROUND RESULTS";
-                btn.innerText = 'Next Round';
+                btn.innerText = state.currentRound >= MAX_ROUNDS ? 'Final Results' : 'Next Round';
                 btn.onclick = () => hostNextRound();
             }
             el.hostControls.appendChild(btn);
